@@ -1,8 +1,9 @@
-import express from 'express';
-import multer from 'multer';
-import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
-import dayjs from 'dayjs';
+import express from "express";
+import { randomBytes } from "node:crypto";
+import multer from "multer";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+import dayjs from "dayjs";
 import {
   AuthUser,
   Employee,
@@ -12,48 +13,98 @@ import {
   AdminUser,
   BillingPlan,
   ExportAudit
-} from './models';
-import { uploadFile } from './services/s3Service';
+} from "./models";
+import { uploadFile } from "./services/s3Service";
+import { requireAdminUser, requireRoles } from "./middleware/adminAuth";
+import {
+  getDefaultBootstrapTxLimit,
+  parseTransactionQuery
+} from "./utils/transactionQuery";
+import { getAggregated, getDailySpend } from "./services/adminAnalyticsService";
+import type { TimelineBucket } from "./services/adminAnalyticsService";
+import { runPolicyPreview } from "./services/policyPreviewService";
+import type { ExpensePolicy } from "./services/analyticsTypes";
 
 const router = express.Router();
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 }
 });
-const JWT_SECRET = process.env.JWT_SECRET || 'allpay_super_secret';
+const JWT_SECRET = process.env.JWT_SECRET || "allpay_super_secret";
 
-// Middleware to verify JWT
+const R_FIN = requireRoles("super_admin", "finance_manager");
+const R_HR = requireRoles("super_admin", "finance_manager", "hr_manager");
+const R_BILL = requireRoles("super_admin");
+const R_ADM = requireRoles("super_admin");
+const R_EX = requireRoles("super_admin", "finance_manager", "auditor");
+const R_ANAL = requireRoles("super_admin", "finance_manager", "hr_manager", "auditor");
+
 const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const token = req.headers.authorization?.split(' ')[1];
+  const token = req.headers.authorization?.split(" ")[1];
   if (!token) {
-    return res.status(401).json({ message: 'Unauthorized' });
+    return res.status(401).json({ message: "Unauthorized" });
   }
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    (req as any).user = decoded;
+    (req as express.Request & { user?: { id: string; email: string } }).user = decoded as {
+      id: string;
+      email: string;
+    };
     next();
   } catch (err) {
-    return res.status(401).json({ message: 'Invalid token' });
+    return res.status(401).json({ message: "Invalid token" });
   }
 };
 
+function formatTransactionDoc(doc: { toObject: () => Record<string, unknown> }) {
+  const obj = doc.toObject();
+  if (obj["isNewTx"] !== undefined) {
+    obj["isNew"] = obj["isNewTx"];
+    delete obj["isNewTx"];
+  }
+  return obj;
+}
+
+async function listTransactionsFromQuery(
+  raw: Record<string, string | string[] | undefined>,
+  options: { bootstrapDefaultLimit?: number } = {}
+) {
+  const q: Record<string, string | string[] | undefined> = { ...raw };
+  if (options.bootstrapDefaultLimit != null && q["limit"] == null && q["page"] == null) {
+    q["page"] = "1";
+    q["limit"] = String(options.bootstrapDefaultLimit);
+  }
+  const { page, limit, skip, filter } = parseTransactionQuery(q);
+  const [items, total] = await Promise.all([
+    Transaction.find(filter).sort({ dateTime: -1 }).skip(skip).limit(limit).exec(),
+    Transaction.countDocuments(filter)
+  ]);
+  return {
+    transactions: items.map(formatTransactionDoc),
+    transactionPage: page,
+    transactionPageSize: limit,
+    transactionTotal: total,
+    hasMoreTransactions: page * limit < total
+  };
+}
+
 // --- AUTH ROUTES ---
-router.post('/auth/signup', async (req, res) => {
+router.post("/auth/signup", async (req, res) => {
   try {
     const { email, password, ...rest } = req.body;
     const normalizedEmail = email.trim().toLowerCase();
-    
+
     const existing = await AuthUser.findOne({ email: normalizedEmail });
     if (existing) {
-      return res.status(400).json({ ok: false, message: 'Account already exists.' });
+      return res.status(400).json({ ok: false, message: "Account already exists." });
     }
 
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash(password, salt);
-    
+
     const id = `usr_${Date.now().toString(36)}`;
     const createdAt = new Date().toISOString();
-    
+
     const newUser = new AuthUser({
       id,
       email: normalizedEmail,
@@ -61,15 +112,21 @@ router.post('/auth/signup', async (req, res) => {
       createdAt,
       ...rest
     });
-    
+
     await newUser.save();
-    
-    const token = jwt.sign({ id, email: normalizedEmail }, JWT_SECRET, { expiresIn: '7d' });
-    
-    const userPayload = { ...newUser.toObject() };
+
+    const token = jwt.sign({ id, email: normalizedEmail }, JWT_SECRET, { expiresIn: "7d" });
+
+    const userPayload = { ...newUser.toObject() } as Record<string, unknown>;
     delete userPayload.passwordHash;
     delete userPayload._id;
     delete userPayload.__v;
+
+    const adminRecord = await AdminUser.findOne({ email: normalizedEmail, active: true });
+    if (adminRecord) {
+      userPayload["adminId"] = adminRecord.id;
+      userPayload["adminRole"] = adminRecord.role;
+    }
 
     res.json({ ok: true, user: userPayload, token });
   } catch (error) {
@@ -77,27 +134,33 @@ router.post('/auth/signup', async (req, res) => {
   }
 });
 
-router.post('/auth/login', async (req, res) => {
+router.post("/auth/login", async (req, res) => {
   try {
     const { email, password } = req.body;
     const normalizedEmail = email.trim().toLowerCase();
-    
+
     const user = await AuthUser.findOne({ email: normalizedEmail });
     if (!user) {
-      return res.status(400).json({ ok: false, message: 'No account found.' });
+      return res.status(400).json({ ok: false, message: "No account found." });
     }
-    
+
     const isMatch = await bcrypt.compare(password, user.passwordHash);
     if (!isMatch) {
-      return res.status(400).json({ ok: false, message: 'Incorrect password.' });
+      return res.status(400).json({ ok: false, message: "Incorrect password." });
     }
-    
-    const token = jwt.sign({ id: user.id, email: normalizedEmail }, JWT_SECRET, { expiresIn: '7d' });
-    
-    const userPayload = { ...user.toObject() };
+
+    const token = jwt.sign({ id: user.id, email: normalizedEmail }, JWT_SECRET, { expiresIn: "7d" });
+
+    const userPayload = { ...user.toObject() } as Record<string, unknown>;
     delete userPayload.passwordHash;
     delete userPayload._id;
     delete userPayload.__v;
+
+    const adminRecord = await AdminUser.findOne({ email: normalizedEmail, active: true });
+    if (adminRecord) {
+      userPayload["adminId"] = adminRecord.id;
+      userPayload["adminRole"] = adminRecord.role;
+    }
 
     res.json({ ok: true, user: userPayload, token });
   } catch (error) {
@@ -105,46 +168,42 @@ router.post('/auth/login', async (req, res) => {
   }
 });
 
-// --- ADMIN ROUTES ---
-router.use('/admin', authMiddleware); // Protect all admin routes
+// --- ADMIN (JWT + active AdminUser record) ---
+router.use("/admin", authMiddleware, requireAdminUser);
 
-router.get('/admin/bootstrap', async (req, res) => {
+router.get("/admin/bootstrap", async (req, res) => {
   try {
-    const [
-      transactions,
-      employees,
-      policies,
-      alertsConfigArr,
-      admins,
-      billingArr,
-      exportAudits
-    ] = await Promise.all([
-      Transaction.find().sort({ dateTime: -1 }).limit(350),
-      Employee.find(),
-      ExpensePolicy.find(),
-      AlertConfig.find(),
-      AdminUser.find(),
-      BillingPlan.find(),
-      ExportAudit.find().sort({ exportedAt: -1 })
-    ]);
-
-    const formatDoc = (doc: any) => {
-      const obj = doc.toObject();
-      // map isNewTx back to isNew for frontend
-      if (obj.isNewTx !== undefined) {
-        obj.isNew = obj.isNewTx;
-        delete obj.isNewTx;
-      }
-      return obj;
-    };
+    const [txBlock, employees, policies, alertsConfigArr, admins, billingArr, exportAudits] =
+      await Promise.all([
+        listTransactionsFromQuery(req.query as any, { bootstrapDefaultLimit: getDefaultBootstrapTxLimit() }),
+        Employee.find().exec(),
+        ExpensePolicy.find().exec(),
+        AlertConfig.find().exec(),
+        AdminUser.find().exec(),
+        BillingPlan.find().exec(),
+        ExportAudit.find().sort({ exportedAt: -1 }).exec()
+      ]);
 
     res.json({
-      transactions: transactions.map(formatDoc),
+      ...txBlock,
       employees,
       policies,
-      alertsConfig: alertsConfigArr[0] || { delivery: 'both', threshold: 'daily_digest', mutedPolicies: [], mutedEmployees: [] },
+      alertsConfig:
+        alertsConfigArr[0] || {
+          delivery: "both",
+          threshold: "daily_digest",
+          mutedPolicies: [],
+          mutedEmployees: []
+        },
       admins,
-      billing: billingArr[0] || { plan: 'Basic', billingCycle: 'monthly', nextRenewal: dayjs().add(1, 'month').format('YYYY-MM-DD'), licenses: 0, headcount: 0 },
+      billing:
+        billingArr[0] || {
+          plan: "Basic",
+          billingCycle: "monthly",
+          nextRenewal: dayjs().add(1, "month").format("YYYY-MM-DD"),
+          licenses: 0,
+          headcount: 0
+        },
       exportAudits
     });
   } catch (error) {
@@ -152,19 +211,78 @@ router.get('/admin/bootstrap', async (req, res) => {
   }
 });
 
-router.post('/admin/transactions/approve', async (req, res) => {
+router.get("/admin/transactions", async (req, res) => {
+  try {
+    const { transactions, transactionPage, transactionPageSize, transactionTotal, hasMoreTransactions } =
+      await listTransactionsFromQuery({ ...req.query } as any, {});
+    res.json({ transactions, transactionPage, transactionPageSize, transactionTotal, hasMoreTransactions });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+/** ADM-001: one-day spend totals and category mix */
+router.get("/admin/analytics/daily-spend", R_ANAL, async (req, res) => {
+  try {
+    const d = req.query["date"];
+    const dateStr = Array.isArray(d) ? d[0] : d;
+    const data = await getDailySpend(typeof dateStr === "string" ? dateStr : undefined);
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+/** ADM-006: KPIs, category / employee / timeline breakdowns */
+router.get("/admin/analytics/aggregated", R_ANAL, async (req, res) => {
+  try {
+    const start = req.query["startDate"];
+    const end = req.query["endDate"];
+    const b = req.query["timelineBucket"];
+    const startDate = (Array.isArray(start) ? start[0] : start) as string | undefined;
+    const endDate = (Array.isArray(end) ? end[0] : end) as string | undefined;
+    const raw = (Array.isArray(b) ? b[0] : b) as string | undefined;
+    const bucket: TimelineBucket =
+      raw === "weekly" || raw === "monthly" ? raw : "daily";
+    const data = await getAggregated(startDate, endDate, bucket);
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+/** ADM-003: simulate a policy over stored transactions (policy effective dates apply in-engine) */
+router.post("/admin/policies/preview", R_FIN, async (req, res) => {
+  try {
+    const policy = req.body as ExpensePolicy;
+    if (!policy || typeof policy !== "object") {
+      return res.status(400).json({ error: "Policy body required" });
+    }
+    if (!policy.id && !policy.name) {
+      return res.status(400).json({ error: "Policy id or name is required" });
+    }
+    const txs = await Transaction.find({}).lean();
+    const preview = runPolicyPreview(txs, policy);
+    res.json({ ok: true, ...preview });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+router.post("/admin/transactions/approve", R_FIN, async (req, res) => {
   const { transactionId, amount } = req.body;
   try {
     const tx = await Transaction.findOne({ id: transactionId });
-    if (!tx) return res.status(404).json({ error: 'Not found' });
-    
-    tx.status = 'approved';
+    if (!tx) return res.status(404).json({ error: "Not found" });
+
+    const actor = req.adminUser?.name || "Admin";
+    tx.status = "approved";
     tx.claimedAmount = amount;
-    tx.adminDecision = amount === tx.amount ? 'Approved in full' : `Partial approval Rs.${amount}`;
+    tx.adminDecision = amount === tx.amount ? "Approved in full" : `Partial approval Rs.${amount}`;
     tx.adminDecisionAt = dayjs().toISOString();
     tx.timeline.push(
-      { id: `${tx.id}-review`, actor: 'Finance Admin', action: 'Admin reviewed', timestamp: dayjs().toISOString() },
-      { id: `${tx.id}-approve`, actor: 'Finance Admin', action: `Approved Rs.${amount}`, timestamp: dayjs().toISOString() }
+      { id: `${tx.id}-review`, actor, action: "Admin reviewed", timestamp: dayjs().toISOString() },
+      { id: `${tx.id}-approve`, actor, action: `Approved Rs.${amount}`, timestamp: dayjs().toISOString() }
     );
     await tx.save();
     res.json({ ok: true, transactionId, amount, processedAt: dayjs().toISOString() });
@@ -173,18 +291,19 @@ router.post('/admin/transactions/approve', async (req, res) => {
   }
 });
 
-router.post('/admin/transactions/reject', async (req, res) => {
+router.post("/admin/transactions/reject", R_FIN, async (req, res) => {
   const { transactionId, reason } = req.body;
   try {
     const tx = await Transaction.findOne({ id: transactionId });
-    if (!tx) return res.status(404).json({ error: 'Not found' });
-    
-    tx.status = 'rejected';
+    if (!tx) return res.status(404).json({ error: "Not found" });
+
+    const actor = req.adminUser?.name || "Admin";
+    tx.status = "rejected";
     tx.adminDecision = `Rejected - ${reason}`;
     tx.adminDecisionAt = dayjs().toISOString();
     tx.timeline.push(
-      { id: `${tx.id}-review`, actor: 'Finance Admin', action: 'Admin reviewed', timestamp: dayjs().toISOString() },
-      { id: `${tx.id}-reject`, actor: 'Finance Admin', action: `Rejected (${reason})`, timestamp: dayjs().toISOString() }
+      { id: `${tx.id}-review`, actor, action: "Admin reviewed", timestamp: dayjs().toISOString() },
+      { id: `${tx.id}-reject`, actor, action: `Rejected (${reason})`, timestamp: dayjs().toISOString() }
     );
     await tx.save();
     res.json({ ok: true, transactionId, reason, processedAt: dayjs().toISOString() });
@@ -193,22 +312,23 @@ router.post('/admin/transactions/reject', async (req, res) => {
   }
 });
 
-router.post('/admin/transactions/bulk', async (req, res) => {
+router.post("/admin/transactions/bulk", R_FIN, async (req, res) => {
   const { ids, decision, reason } = req.body;
   try {
     const txs = await Transaction.find({ id: { $in: ids } });
+    const actor = req.adminUser?.name || "Admin";
     for (const tx of txs) {
-      if (decision === 'approved') {
-        tx.status = 'approved';
-        tx.adminDecision = 'Bulk approved';
+      if (decision === "approved") {
+        tx.status = "approved";
+        tx.adminDecision = "Bulk approved";
       } else {
-        tx.status = 'rejected';
-        tx.adminDecision = `Bulk rejected - ${reason || 'Policy violation'}`;
+        tx.status = "rejected";
+        tx.adminDecision = `Bulk rejected - ${reason || "Policy violation"}`;
       }
       tx.adminDecisionAt = dayjs().toISOString();
       tx.timeline.push({
         id: `${tx.id}-bulk`,
-        actor: 'Finance Admin',
+        actor,
         action: `Bulk ${decision}`,
         timestamp: dayjs().toISOString()
       });
@@ -221,17 +341,18 @@ router.post('/admin/transactions/bulk', async (req, res) => {
 });
 
 router.post(
-  '/admin/transactions/:id/receipt',
-  upload.single('receipt'),
+  "/admin/transactions/:id/receipt",
+  R_FIN,
+  upload.single("receipt"),
   async (req, res) => {
     try {
       const { id } = req.params;
       if (!req.file) {
-        return res.status(400).json({ error: 'No file uploaded' });
+        return res.status(400).json({ error: "No file uploaded" });
       }
       const tx = await Transaction.findOne({ id });
       if (!tx) {
-        return res.status(404).json({ error: 'Not found' });
+        return res.status(404).json({ error: "Not found" });
       }
       const receiptUrl = await uploadFile(
         req.file.buffer,
@@ -248,7 +369,7 @@ router.post(
   }
 );
 
-router.post('/admin/policies', async (req, res) => {
+router.post("/admin/policies", R_FIN, async (req, res) => {
   try {
     const policy = new ExpensePolicy(req.body);
     await policy.save();
@@ -258,16 +379,105 @@ router.post('/admin/policies', async (req, res) => {
   }
 });
 
-router.post('/admin/employees/import', async (req, res) => {
-  // simple mock for now, actual logic in frontend creates them and we could bulk insert here
-  res.json({ ok: true });
+router.post("/admin/employees/import", R_HR, async (req, res) => {
+  const { csvText } = req.body as { csvText?: string };
+  if (csvText == null || String(csvText).trim() === "") {
+    return res.status(400).json({ error: "csvText required" });
+  }
+  const lines = String(csvText).trim().split(/\n/);
+  if (lines.length < 2) {
+    return res.json({ ok: true, created: [], skipped: 0, errors: ["No data rows"] });
+  }
+  const header = lines[0]!.split(",").map((c) => c.trim().toLowerCase());
+  const idx = (h: string) => header.indexOf(h);
+  const I = {
+    id: idx("id"),
+    name: idx("name"),
+    email: idx("email"),
+    department: idx("department"),
+    role: idx("role")
+  };
+  if (I.email < 0) {
+    return res.status(400).json({ error: "CSV must include an email column" });
+  }
+  const created: object[] = [];
+  const errors: string[] = [];
+  let skipped = 0;
+  for (let r = 1; r < lines.length; r++) {
+    const cells = lines[r]!.split(",").map((c) => c.trim());
+    const email = I.email >= 0 ? cells[I.email] : "";
+    if (!email) {
+      errors.push(`Row ${r + 1}: missing email`);
+      continue;
+    }
+    const id = I.id >= 0 && cells[I.id!] ? cells[I.id!]! : `EMP-I-${Date.now()}-${r}`;
+    const name = I.name >= 0 && cells[I.name!] ? cells[I.name!]! : email.split("@")[0]! || "User";
+    const department =
+      I.department >= 0 && cells[I.department!] ? cells[I.department!]! : "Unassigned";
+    const roleRec =
+      I.role >= 0 && cells[I.role!] ? (cells[I.role!]! === "manager" ? "manager" : "employee") : "employee";
+    const dupe = await Employee.findOne({ email: email.toLowerCase() });
+    if (dupe) {
+      skipped += 1;
+      continue;
+    }
+    try {
+      const emp = await Employee.create({
+        id,
+        name,
+        email: email.toLowerCase(),
+        department,
+        role: roleRec,
+        active: true,
+        onboarded: false,
+        travelApproved: false
+      });
+      const o = emp.toObject() as unknown as Record<string, unknown>;
+      delete o._id;
+      delete o.__v;
+      created.push(o);
+    } catch (e) {
+      errors.push(`Row ${r + 1}: ${(e as Error).message}`);
+    }
+  }
+  res.json({ ok: true, created, skipped, errors, createdCount: created.length });
 });
 
-router.post('/admin/employees/invite', async (req, res) => {
-  res.json({ ok: true });
+router.post("/admin/employees/invite", R_HR, async (req, res) => {
+  const { email, department, name: nameIn } = req.body as {
+    email?: string;
+    department?: string;
+    name?: string;
+  };
+  if (!email || !String(email).trim()) {
+    return res.status(400).json({ error: "email required" });
+  }
+  const em = String(email).trim().toLowerCase();
+  if (await Employee.findOne({ email: em })) {
+    return res.status(400).json({ error: "Employee with this email already exists" });
+  }
+  const id = `EMP-INV-${Date.now().toString(36)}`;
+  const name = (nameIn && String(nameIn).trim()) || em.split("@")[0] || "User";
+  const departmentVal = (department && String(department).trim()) || "Unassigned";
+  const inviteToken = randomBytes(24).toString("hex");
+  const emp = await Employee.create({
+    id,
+    name,
+    email: em,
+    department: departmentVal,
+    role: "employee",
+    active: true,
+    onboarded: false,
+    travelApproved: false,
+    inviteToken
+  });
+  const o = emp.toObject() as unknown as Record<string, unknown>;
+  delete o._id;
+  delete o.__v;
+  res.json({ ok: true, employee: o });
 });
 
-router.patch('/admin/alerts', async (req, res) => {
+router.patch("/admin/alerts", R_FIN, async (req, res) => {
   try {
     let alert = await AlertConfig.findOne();
     if (!alert) alert = new AlertConfig();
@@ -279,7 +489,7 @@ router.patch('/admin/alerts', async (req, res) => {
   }
 });
 
-router.patch('/admin/billing', async (req, res) => {
+router.patch("/admin/billing", R_BILL, async (req, res) => {
   try {
     let bill = await BillingPlan.findOne();
     if (!bill) bill = new BillingPlan();
@@ -291,22 +501,26 @@ router.patch('/admin/billing', async (req, res) => {
   }
 });
 
-router.put('/admin/users', async (req, res) => {
+router.put("/admin/users", R_ADM, async (req, res) => {
   try {
-    const admin = await AdminUser.findOneAndUpdate(
-      { id: req.body.id },
-      req.body,
-      { upsert: true, new: true }
-    );
+    const admin = await AdminUser.findOneAndUpdate({ id: req.body.id }, req.body, {
+      upsert: true,
+      new: true
+    });
     res.json({ ok: true, admin });
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
   }
 });
 
-router.post('/admin/users/:id/toggle', async (req, res) => {
+router.post("/admin/users/:id/toggle", R_ADM, async (req, res) => {
   try {
-    const admin = await AdminUser.findOne({ id: req.params.id });
+    const rawId = req.params["id"];
+    const paramId = Array.isArray(rawId) ? rawId[0] : rawId;
+    if (!paramId) {
+      return res.status(400).json({ error: "Missing id" });
+    }
+    const admin = await AdminUser.findOne({ id: String(paramId) });
     if (admin) {
       admin.active = !admin.active;
       await admin.save();
@@ -317,14 +531,15 @@ router.post('/admin/users/:id/toggle', async (req, res) => {
   }
 });
 
-router.post('/admin/exports', async (req, res) => {
+router.post("/admin/exports", R_EX, async (req, res) => {
   try {
     const payload = req.body;
+    const actor = req.adminUser?.name || "Admin";
     const exp = new ExportAudit({
       id: `EXP-${Date.now()}`,
-      actor: 'Finance Admin', // get from auth later
+      actor,
       ...payload,
-      exportedAt: dayjs().toISOString(),
+      exportedAt: dayjs().toISOString()
     });
     await exp.save();
     res.json({ ok: true, payload });

@@ -36,9 +36,23 @@ export async function seedDatabase() {
     createdAt: new Date().toISOString()
   });
 
+  await AuthUser.create({
+    id: 'usr_audit',
+    email: 'auditor@example.com',
+    fullName: 'Auditor User',
+    companyName: 'Test Inc',
+    companySize: '10-50',
+    monthlySpend: '1L',
+    companyType: 'LLC',
+    passwordHash,
+    createdAt: new Date().toISOString()
+  });
+
   const admins = [
     { id: "ADM-1", name: "Riya Nair", email: "riya@allpay.in", role: "super_admin", active: true, twoFactor: true },
     { id: "ADM-2", name: "Aman Sharma", email: "aman@allpay.in", role: "finance_manager", active: true, twoFactor: true },
+    { id: "ADM-TEST", name: "Test Admin", email: "test@example.com", role: "super_admin", active: true, twoFactor: false },
+    { id: "ADM-AUD", name: "Read-only Auditor", email: "auditor@example.com", role: "auditor", active: true, twoFactor: false }
   ];
   await AdminUser.insertMany(admins);
 

@@ -63,6 +63,7 @@ describe("AllPay API", () => {
     expect(res.body.ok).toBe(true);
     expect(res.body.token).toBeTruthy();
     expect(res.body.user?.email).toBe("newuser.apitest@example.com");
+    expect(res.body.user?.adminId).toBeUndefined();
   });
 
   it("POST /api/auth/login returns 400 for bad password", async () => {
@@ -93,19 +94,121 @@ describe("AllPay API", () => {
     expect(res.status).toBe(401);
   });
 
-  it("GET /api/admin/bootstrap returns payload with collections", async () => {
+  it("GET /api/admin/bootstrap returns payload with collections and transaction pagination meta", async () => {
     const res = await request(app)
       .get("/api/admin/bootstrap")
       .set(authHeader(token));
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body.transactions)).toBe(true);
     expect(res.body.transactions.length).toBeGreaterThan(0);
+    expect(typeof res.body.transactionTotal).toBe("number");
+    expect(res.body.transactionTotal).toBeGreaterThanOrEqual(2);
+    expect(res.body.hasMoreTransactions).toBe(false);
     expect(Array.isArray(res.body.employees)).toBe(true);
     expect(Array.isArray(res.body.policies)).toBe(true);
     expect(res.body.alertsConfig).toBeDefined();
     expect(Array.isArray(res.body.admins)).toBe(true);
     expect(res.body.billing).toBeDefined();
     expect(Array.isArray(res.body.exportAudits)).toBe(true);
+  });
+
+  it("GET /api/admin/transactions returns a page and total", async () => {
+    const res = await request(app)
+      .get("/api/admin/transactions?page=1&limit=1")
+      .set(authHeader(token));
+    expect(res.status).toBe(200);
+    expect(res.body.transactions.length).toBe(1);
+    expect(res.body.transactionTotal).toBeGreaterThanOrEqual(2);
+    expect(res.body.hasMoreTransactions).toBe(true);
+  });
+
+  it("GET /api/admin/analytics/daily-spend returns totals and category mix", async () => {
+    const res = await request(app)
+      .get("/api/admin/analytics/daily-spend")
+      .set(authHeader(token));
+    expect(res.status).toBe(200);
+    expect(typeof res.body.date).toBe("string");
+    expect(typeof res.body.totalSpend).toBe("number");
+    expect(typeof res.body.transactionCount).toBe("number");
+    expect(Array.isArray(res.body.byCategory)).toBe(true);
+  });
+
+  it("GET /api/admin/analytics/aggregated returns KPIs and series", async () => {
+    const res = await request(app)
+      .get("/api/admin/analytics/aggregated?timelineBucket=daily")
+      .set(authHeader(token));
+    expect(res.status).toBe(200);
+    expect(res.body.kpis).toBeDefined();
+    expect(typeof res.body.kpis.totalSpend).toBe("number");
+    expect(Array.isArray(res.body.byCategory)).toBe(true);
+    expect(Array.isArray(res.body.byEmployee)).toBe(true);
+    expect(Array.isArray(res.body.timeline)).toBe(true);
+    expect(Array.isArray(res.body.topSpenders)).toBe(true);
+  });
+
+  it("POST /api/admin/policies/preview returns wouldFlagCount", async () => {
+    const res = await request(app)
+      .post("/api/admin/policies/preview")
+      .set(authHeader(token))
+      .send({
+        id: "POL-PREV",
+        name: "Preview test",
+        mccCategory: "Meals",
+        maxPerTransaction: 1000,
+        maxPerMonth: 1000000,
+        allowedDays: [1, 2, 3, 4, 5, 6, 0],
+        scopeType: "all",
+        startDate: "2000-01-01",
+        active: true
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(typeof res.body.wouldFlagCount).toBe("number");
+  });
+
+  it("returns 403 for admin routes when the user is not in AdminUser", async () => {
+    const up = await request(app)
+      .post("/api/auth/signup")
+      .send({
+        email: "noadmin@example.com",
+        password: "x",
+        fullName: "X",
+        companyName: "Y",
+        companySize: "1-10",
+        monthlySpend: "50K",
+        companyType: "LLC"
+      });
+    expect(up.status).toBe(200);
+    const t = up.body.token as string;
+    const res = await request(app).get("/api/admin/bootstrap").set(authHeader(t));
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("NOT_ADMIN");
+  });
+
+  it("auditor cannot approve transactions (403)", async () => {
+    const login = await request(app)
+      .post("/api/auth/login")
+      .send({ email: "auditor@example.com", password: "password123" });
+    expect(login.status).toBe(200);
+    const audToken = login.body.token as string;
+    const res = await request(app)
+      .post("/api/admin/transactions/approve")
+      .set(authHeader(audToken))
+      .send({ transactionId: "TX-70001", amount: 1 });
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("RBAC_FORBIDDEN");
+  });
+
+  it("auditor can record export (allowed role)", async () => {
+    const login = await request(app)
+      .post("/api/auth/login")
+      .send({ email: "auditor@example.com", password: "password123" });
+    const audToken = login.body.token as string;
+    const res = await request(app)
+      .post("/api/admin/exports")
+      .set(authHeader(audToken))
+      .send({ format: "csv", dateRange: "all", recordCount: 1 });
+    expect(res.status).toBe(200);
   });
 
   it("POST /api/admin/transactions/approve", async () => {
@@ -222,22 +325,28 @@ describe("AllPay API", () => {
     expect(res.body.ok).toBe(true);
   });
 
-  it("POST /api/admin/employees/import", async () => {
+  it("POST /api/admin/employees/import parses rows and creates employees", async () => {
     const res = await request(app)
       .post("/api/admin/employees/import")
       .set(authHeader(token))
-      .send({ csvText: "id,name,email" });
+      .send({
+        csvText: "id,name,email,department,role\nEMP-CSV-1,Jane,csv-emp-1@example.com,Eng,employee"
+      });
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
+    expect(res.body.createdCount).toBe(1);
+    expect(res.body.created[0].email).toBe("csv-emp-1@example.com");
   });
 
-  it("POST /api/admin/employees/invite", async () => {
+  it("POST /api/admin/employees/invite persists an employee and inviteToken", async () => {
     const res = await request(app)
       .post("/api/admin/employees/invite")
       .set(authHeader(token))
-      .send({ email: "invite@example.com", department: "Engineering" });
+      .send({ email: "invite-unique-1@example.com", department: "Engineering" });
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
+    expect(res.body.employee?.email).toBe("invite-unique-1@example.com");
+    expect(res.body.employee?.inviteToken).toBeDefined();
   });
 
   it("POST /api/admin/transactions/:id/receipt uploads and returns receiptUrl (S3 mocked)", async () => {

@@ -18,7 +18,8 @@ import {
   Typography,
 } from "@mui/material";
 import dayjs from "dayjs";
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
+import { adminApi, type PolicyPreviewResponse } from "../../api/adminApi";
 import { useAdminData } from "../../context/AdminDataContext";
 import type { ExpensePolicy } from "../../types";
 
@@ -33,8 +34,11 @@ const weekdayOptions = [
 ];
 
 export const AdminPoliciesPage = () => {
-  const { policies, createPolicy, previewPolicy, isSaving, errorMessage } = useAdminData();
+  const { policies, createPolicy, isSaving, errorMessage } = useAdminData();
   const [createdInfo, setCreatedInfo] = useState("");
+  const [serverPreview, setServerPreview] = useState<PolicyPreviewResponse | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState("");
   const [policy, setPolicy] = useState<ExpensePolicy>({
     id: `POL-${Date.now()}`,
     name: "",
@@ -49,7 +53,18 @@ export const AdminPoliciesPage = () => {
     active: true,
   });
 
-  const preview = useMemo(() => previewPolicy(policy), [policy, previewPolicy]);
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      setPreviewLoading(true);
+      setPreviewError("");
+      adminApi
+        .previewPolicy(policy)
+        .then((r) => setServerPreview(r))
+        .catch((e) => setPreviewError((e as Error).message))
+        .finally(() => setPreviewLoading(false));
+    }, 450);
+    return () => clearTimeout(t);
+  }, [policy]);
 
   return (
     <Stack spacing={2.5}>
@@ -112,14 +127,32 @@ export const AdminPoliciesPage = () => {
               startIcon={<Add />}
               disabled={isSaving}
               onClick={async () => {
-                const result = await createPolicy({ ...policy, id: `POL-${Date.now()}` });
-                setCreatedInfo(`Policy activated. ${result.matchedCount} historical transactions would have been flagged.`);
+                const p = { ...policy, id: `POL-${Date.now()}` };
+                const prev = await adminApi.previewPolicy(p);
+                await createPolicy(p);
+                setCreatedInfo(
+                  `Policy activated. Server preview: ${prev.wouldFlagCount} transactions would have been flagged; ${prev.affectedEmployeeCount} employees affected; est. savings if rejected: Rs.${prev.estimatedSavingsIfRejected.toLocaleString("en-IN")}.`
+                );
               }}
             >
               Activate policy
             </Button>
-            <Chip color="warning" label={`Preview matches: ${preview.length}`} />
+            <Chip
+              color="warning"
+              label={
+                previewLoading
+                  ? "Server preview…"
+                  : `Server preview: ${serverPreview?.wouldFlagCount ?? "—"} matches`
+              }
+            />
+            {serverPreview != null && !previewLoading ? (
+              <Chip
+                color="info"
+                label={`Employees: ${serverPreview.affectedEmployeeCount} · Est. savings: Rs.${serverPreview.estimatedSavingsIfRejected.toLocaleString("en-IN")}`}
+              />
+            ) : null}
           </Stack>
+          {previewError ? <Alert severity="warning" sx={{ mt: 1 }}>{previewError}</Alert> : null}
           {createdInfo && <Alert sx={{ mt: 1.4 }}>{createdInfo}</Alert>}
           {errorMessage ? <Alert severity="error" sx={{ mt: 1.2 }}>{errorMessage}</Alert> : null}
         </CardContent>

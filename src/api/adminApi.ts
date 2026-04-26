@@ -8,7 +8,7 @@ import type {
   Transaction,
 } from "../types";
 
-interface BootstrapPayload {
+export interface BootstrapPayload {
   transactions: Transaction[];
   employees: Employee[];
   policies: ExpensePolicy[];
@@ -16,7 +16,61 @@ interface BootstrapPayload {
   admins: AdminUser[];
   billing: BillingPlan;
   exportAudits: ExportAudit[];
+  transactionPage?: number;
+  transactionPageSize?: number;
+  transactionTotal?: number;
+  hasMoreTransactions?: boolean;
 }
+
+export type TransactionsListResponse = {
+  transactions: Transaction[];
+  transactionPage: number;
+  transactionPageSize: number;
+  transactionTotal: number;
+  hasMoreTransactions: boolean;
+};
+
+export type DailySpendResponse = {
+  date: string;
+  totalSpend: number;
+  transactionCount: number;
+  byCategory: { category: string; total: number; count: number }[];
+};
+
+export type AggregatedAnalyticsResponse = {
+  dateRange: { start: string; end: string };
+  kpis: {
+    totalSpend: number;
+    transactionCount: number;
+    averageTransaction: number;
+    approvedSpend: number;
+    pendingSpend: number;
+    rejectedAmount: number;
+    rejectedCount: number;
+    flaggedCount: number;
+  };
+  byCategory: { category: string; total: number; count: number }[];
+  byEmployee: { employeeId: string; employeeName: string; total: number; count: number }[];
+  timeline: { period: string; total: number; count: number }[];
+  topSpenders: { employeeId: string; employeeName: string; total: number }[];
+};
+
+export type PolicyPreviewResponse = {
+  ok: boolean;
+  wouldFlagCount: number;
+  affectedEmployeeCount: number;
+  affectedEmployeeIds: string[];
+  estimatedSavingsIfRejected: number;
+  matches: Array<{
+    transactionId: string;
+    reasons: string[];
+    amount: number;
+    employeeId: string;
+    employeeName: string;
+    category: string;
+  }>;
+  hasMore: boolean;
+};
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api";
 
@@ -40,9 +94,47 @@ const request = async <T,>(path: string, init?: RequestInit): Promise<T> => {
   return (await res.json()) as T;
 };
 
+function toQueryString(params?: Record<string, string | number | boolean | undefined>) {
+  if (!params) return "";
+  const e = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined) continue;
+    e.set(k, String(v));
+  }
+  const s = e.toString();
+  return s ? `?${s}` : "";
+}
+
 export const adminApi = {
-  async bootstrap(): Promise<BootstrapPayload> {
-    return request<BootstrapPayload>("/admin/bootstrap");
+  async bootstrap(params?: Record<string, string | number | boolean | undefined>): Promise<BootstrapPayload> {
+    return request<BootstrapPayload>(`/admin/bootstrap${toQueryString(params)}`);
+  },
+
+  async getTransactions(
+    params?: Record<string, string | number | boolean | undefined>
+  ): Promise<TransactionsListResponse> {
+    return request<TransactionsListResponse>(`/admin/transactions${toQueryString(params)}`);
+  },
+
+  async getDailySpend(dateYmd?: string): Promise<DailySpendResponse> {
+    return request<DailySpendResponse>(
+      `/admin/analytics/daily-spend${toQueryString(dateYmd ? { date: dateYmd } : undefined)}`
+    );
+  },
+
+  async getAnalyticsAggregated(params?: {
+    startDate?: string;
+    endDate?: string;
+    timelineBucket?: "daily" | "weekly" | "monthly";
+  }): Promise<AggregatedAnalyticsResponse> {
+    return request<AggregatedAnalyticsResponse>(`/admin/analytics/aggregated${toQueryString(params)}`);
+  },
+
+  async previewPolicy(policy: ExpensePolicy): Promise<PolicyPreviewResponse> {
+    return request<PolicyPreviewResponse>("/admin/policies/preview", {
+      method: "POST",
+      body: JSON.stringify(policy),
+    });
   },
 
   async approveTransaction(transactionId: string, amount: number) {
@@ -71,11 +163,20 @@ export const adminApi = {
   },
 
   async importEmployees(csvText: string) {
-    return request("/admin/employees/import", { method: "POST", body: JSON.stringify({ csvText }) });
+    return request<{
+      ok: boolean;
+      created: Employee[];
+      createdCount: number;
+      skipped: number;
+      errors: string[];
+    }>("/admin/employees/import", { method: "POST", body: JSON.stringify({ csvText }) });
   },
 
-  async inviteEmployee(email: string, department: string) {
-    return request("/admin/employees/invite", { method: "POST", body: JSON.stringify({ email, department }) });
+  async inviteEmployee(email: string, department: string, name?: string) {
+    return request<{ ok: boolean; employee: Employee }>("/admin/employees/invite", {
+      method: "POST",
+      body: JSON.stringify({ email, department, ...(name ? { name } : {}) }),
+    });
   },
 
   async updateAlerts(config: Partial<AlertConfig>) {

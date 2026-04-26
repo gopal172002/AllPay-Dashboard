@@ -79,7 +79,7 @@ export const AdminDataProvider = ({ children }: { children: React.ReactNode }) =
 
   useEffect(() => {
     adminApi
-      .bootstrap()
+      .bootstrap({ page: 1, limit: 350 })
       .then((payload) => {
         setTransactions(payload.transactions);
         setEmployees(payload.employees);
@@ -251,47 +251,34 @@ export const AdminDataProvider = ({ children }: { children: React.ReactNode }) =
   };
 
   const addEmployeesFromCsv = async (text: string) => {
+    let n = 0;
     await withSaving(async () => {
-      await adminApi.importEmployees(text);
+      const result = await adminApi.importEmployees(text);
+      n = result.createdCount;
+      const added = (result.created as Employee[]).map((e) => ({
+        id: e.id,
+        name: e.name,
+        email: e.email,
+        department: e.department,
+        role: (e.role === "manager" ? "manager" : "employee") as "employee" | "manager",
+        active: e.active !== false,
+        onboarded: e.onboarded ?? false,
+        travelApproved: e.travelApproved ?? false,
+      }));
+      if (added.length) {
+        setEmployees((prev) => [...added, ...prev]);
+        setBilling((prev) => ({ ...prev, headcount: prev.headcount + added.length }));
+      }
     });
-    const rows = text.trim().split("\n");
-    const imported = rows.slice(1).map((row) => {
-      const [id, name, email, department, role] = row.split(",").map((item) => item.trim());
-      return {
-        id,
-        name,
-        email,
-        department,
-        role: role === "manager" ? "manager" : "employee",
-        active: true,
-        onboarded: false,
-        travelApproved: false,
-      } as Employee;
-    });
-    setEmployees((prev) => [...imported, ...prev]);
-    setBilling((prev) => ({ ...prev, headcount: prev.headcount + imported.length }));
-    return imported.length;
+    return n;
   };
 
   const inviteEmployee = async (email: string, department: string) => {
     await withSaving(async () => {
-      await adminApi.inviteEmployee(email, department);
+      const { employee } = await adminApi.inviteEmployee(email, department);
+      setEmployees((prev) => [employee, ...prev]);
+      setBilling((prev) => ({ ...prev, headcount: prev.headcount + 1 }));
     });
-    const id = `EMP-${Math.floor(Math.random() * 9000) + 1000}`;
-    setEmployees((prev) => [
-      {
-        id,
-        name: email.split("@")[0],
-        email,
-        department,
-        role: "employee",
-        active: true,
-        onboarded: false,
-        travelApproved: false,
-      },
-      ...prev,
-    ]);
-    setBilling((prev) => ({ ...prev, headcount: prev.headcount + 1 }));
   };
 
   const manageDepartment = (mode: "create" | "rename" | "delete", value: string, next?: string) => {

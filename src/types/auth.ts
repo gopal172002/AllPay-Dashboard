@@ -8,6 +8,9 @@ export interface AuthUser {
   companyType: string;
   jobTitle?: string;
   createdAt: string;
+  /** Present when this login maps to an AdminUser record. */
+  adminId?: string;
+  adminRole?: string;
 }
 
 export interface SignUpPayload {

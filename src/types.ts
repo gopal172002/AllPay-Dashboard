@@ -10,6 +10,8 @@ export interface Employee {
   active: boolean;
   onboarded: boolean;
   travelApproved: boolean;
+  /** Set when the employee was created via admin invite (for future onboarding link). */
+  inviteToken?: string;
 }
 
 export interface TransactionFlag {

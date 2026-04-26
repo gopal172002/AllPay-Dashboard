@@ -60,6 +60,8 @@ export interface IEmployee extends Document {
   active: boolean;
   onboarded: boolean;
   travelApproved: boolean;
+  /** Present after invite; used for link-based onboarding (email later). */
+  inviteToken?: string;
 }
 
 const EmployeeSchema = new Schema<IEmployee>({
@@ -71,6 +73,7 @@ const EmployeeSchema = new Schema<IEmployee>({
   active: { type: Boolean, default: true },
   onboarded: { type: Boolean, default: false },
   travelApproved: { type: Boolean, default: false },
+  inviteToken: { type: String, sparse: true, select: true },
 });
 
 export const Employee = mongoose.model<IEmployee>('Employee', EmployeeSchema);
