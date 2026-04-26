@@ -1,10 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { AuthUser, SignUpPayload } from "../types/auth";
 
+const TOKEN_KEY = "allpay_token";
 const SESSION_KEY = "allpay_session";
-const USERS_KEY = "allpay_registered_users";
 
-type StoredAccount = SignUpPayload & { id: string; createdAt: string };
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api";
 
 function readSession(): AuthUser | null {
   try {
@@ -16,23 +16,14 @@ function readSession(): AuthUser | null {
   }
 }
 
-function readUsers(): StoredAccount[] {
-  try {
-    const raw = localStorage.getItem(USERS_KEY);
-    if (!raw) return [];
-    return JSON.parse(raw) as StoredAccount[];
-  } catch {
-    return [];
+function writeSession(user: AuthUser | null, token?: string) {
+  if (!user) {
+    localStorage.removeItem(SESSION_KEY);
+    localStorage.removeItem(TOKEN_KEY);
+  } else {
+    localStorage.setItem(SESSION_KEY, JSON.stringify(user));
+    if (token) localStorage.setItem(TOKEN_KEY, token);
   }
-}
-
-function writeUsers(users: StoredAccount[]) {
-  localStorage.setItem(USERS_KEY, JSON.stringify(users));
-}
-
-function writeSession(user: AuthUser | null) {
-  if (!user) localStorage.removeItem(SESSION_KEY);
-  else localStorage.setItem(SESSION_KEY, JSON.stringify(user));
 }
 
 interface AuthContextValue {
@@ -55,51 +46,39 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signIn = useCallback(async (email: string, password: string) => {
-    const normalized = email.trim().toLowerCase();
-    const accounts = readUsers();
-    const match = accounts.find((a) => a.email.toLowerCase() === normalized);
-    if (!match) return { ok: false as const, message: "No account found for this email. Please sign up first." };
-    if (match.password !== password) return { ok: false as const, message: "Incorrect password." };
-    const sessionUser: AuthUser = {
-      id: match.id,
-      email: match.email,
-      fullName: match.fullName,
-      companyName: match.companyName,
-      companySize: match.companySize,
-      monthlySpend: match.monthlySpend,
-      companyType: match.companyType,
-      jobTitle: match.jobTitle,
-      createdAt: match.createdAt,
-    };
-    writeSession(sessionUser);
-    setUser(sessionUser);
-    return { ok: true as const };
+    try {
+      const res = await fetch(`${API_BASE}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await res.json();
+      if (!res.ok) return { ok: false as const, message: data.message || "Failed to login" };
+      
+      writeSession(data.user, data.token);
+      setUser(data.user);
+      return { ok: true as const };
+    } catch (err) {
+      return { ok: false as const, message: "Network error" };
+    }
   }, []);
 
   const signUp = useCallback(async (payload: SignUpPayload) => {
-    const normalized = payload.email.trim().toLowerCase();
-    const accounts = readUsers();
-    if (accounts.some((a) => a.email.toLowerCase() === normalized)) {
-      return { ok: false as const, message: "An account with this email already exists. Please log in." };
+    try {
+      const res = await fetch(`${API_BASE}/auth/signup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) return { ok: false as const, message: data.message || "Failed to sign up" };
+      
+      writeSession(data.user, data.token);
+      setUser(data.user);
+      return { ok: true as const };
+    } catch (err) {
+      return { ok: false as const, message: "Network error" };
     }
-    const id = `usr_${Date.now().toString(36)}`;
-    const createdAt = new Date().toISOString();
-    const row: StoredAccount = { ...payload, email: normalized, id, createdAt };
-    writeUsers([row, ...accounts]);
-    const sessionUser: AuthUser = {
-      id,
-      email: normalized,
-      fullName: payload.fullName,
-      companyName: payload.companyName,
-      companySize: payload.companySize,
-      monthlySpend: payload.monthlySpend,
-      companyType: payload.companyType,
-      jobTitle: payload.jobTitle,
-      createdAt,
-    };
-    writeSession(sessionUser);
-    setUser(sessionUser);
-    return { ok: true as const };
   }, []);
 
   const signOut = useCallback(() => {

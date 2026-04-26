@@ -2,7 +2,6 @@ import dayjs from "dayjs";
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { adminApi } from "../api/adminApi";
 import type { AdminUser, AlertConfig, BillingPlan, Employee, ExpensePolicy, ExportAudit, Transaction, TransactionFilters } from "../types";
-import { detectFraudFlags } from "../utils/fraud";
 
 const FILTER_KEY = "admin-dashboard-filters";
 
@@ -50,11 +49,10 @@ interface AdminDataContextShape {
   upsertAdmin: (admin: AdminUser) => Promise<void>;
   toggleAdminActive: (id: string) => Promise<void>;
   recordExport: (format: "csv" | "pdf", dateRange: string, recordCount: number) => Promise<void>;
+  uploadReceipt: (transactionId: string, file: File) => Promise<void>;
 }
 
 const AdminDataContext = createContext<AdminDataContextShape | undefined>(undefined);
-
-const randomItem = <T,>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
 
 export const AdminDataProvider = ({ children }: { children: React.ReactNode }) => {
   const [isBootstrapping, setIsBootstrapping] = useState(true);
@@ -68,7 +66,7 @@ export const AdminDataProvider = ({ children }: { children: React.ReactNode }) =
   const [billing, setBilling] = useState<BillingPlan>({ plan: "Basic", billingCycle: "monthly", nextRenewal: dayjs().add(1, "month").format("YYYY-MM-DD"), licenses: 0, headcount: 0 });
   const [exportAudits, setExportAudits] = useState<ExportAudit[]>([]);
   const [flaggedOnly, setFlaggedOnly] = useState(false);
-  const [dashboardLoadMs, setDashboardLoadMs] = useState(900);
+  const [dashboardLoadMs] = useState(900);
   const [filters, setLocalFilters] = useState<TransactionFilters>(() => {
     const stored = localStorage.getItem(FILTER_KEY);
     if (!stored) return defaultFilters;
@@ -102,57 +100,7 @@ export const AdminDataProvider = ({ children }: { children: React.ReactNode }) =
     localStorage.setItem(FILTER_KEY, JSON.stringify(filters));
   }, [filters]);
 
-  useEffect(() => {
-    const id = setInterval(() => {
-      const employee = randomItem(employees.filter((item) => item.active));
-      const amount = 250 + Math.round(Math.random() * 3000);
-      const now = dayjs();
-      const base: Transaction = {
-        id: `TX-LIVE-${now.valueOf()}`,
-        employeeId: employee.id,
-        employeeName: employee.name,
-        department: employee.department,
-        merchantName: randomItem(["Indian Oil", "Uber", "IRCTC", "Swiggy", "Amazon Business"]),
-        mcc: randomItem(["5541", "4121", "4112", "5812", "5942"]),
-        category: randomItem(["Fuel", "Travel", "Meals", "Office Supplies"]),
-        amount,
-        claimedAmount: Math.random() > 0.8 ? amount + 200 : amount,
-        dateTime: now.toISOString(),
-        status: "pending",
-        upiApp: randomItem(["GPay", "PhonePe", "Paytm", "BHIM"]),
-        upiRefId: `UPI${now.format("HHmmss")}${Math.floor(Math.random() * 899) + 100}`,
-        isNew: true,
-        flags: [],
-        receiptUrl: "https://dummyimage.com/420x300/e9efff/1f2a4f&text=New+Receipt",
-        hasMatchingAllpayRecord: Math.random() > 0.12,
-        purposeCategory: Math.random() > 0.85 ? "Client Entertainment" : "Travel",
-        timeline: [
-          { id: `${now.valueOf()}-a`, actor: "system", action: "Transaction captured", timestamp: now.toISOString() },
-          { id: `${now.valueOf()}-b`, actor: "employee", action: "Submitted for reimbursement", timestamp: now.add(1, "minute").toISOString() },
-        ],
-      };
 
-      setTransactions((prev) => {
-        const withFlags = detectFraudFlags(base, [base, ...prev], employees);
-        const next = { ...base, flags: withFlags, status: withFlags.length ? ("flagged" as const) : ("pending" as const) };
-        return [next, ...prev].slice(0, 350);
-      });
-      setDashboardLoadMs(400 + Math.floor(Math.random() * 1200));
-    }, 30000);
-
-    return () => clearInterval(id);
-  }, [employees]);
-
-  useEffect(() => {
-    const id = setInterval(() => {
-      setTransactions((prev) =>
-        prev.map((tx) =>
-          dayjs().diff(dayjs(tx.dateTime), "second") > 60 && tx.isNew ? { ...tx, isNew: false } : tx,
-        ),
-      );
-    }, 5000);
-    return () => clearInterval(id);
-  }, []);
 
   const filteredTransactions = useMemo(() => {
     return transactions.filter((tx) => {
@@ -404,6 +352,15 @@ export const AdminDataProvider = ({ children }: { children: React.ReactNode }) =
     ]);
   };
 
+  const uploadReceipt = async (transactionId: string, file: File) => {
+    await withSaving(async () => {
+      const result = await adminApi.uploadReceipt(transactionId, file);
+      setTransactions((prev) =>
+        prev.map((tx) => (tx.id === transactionId ? { ...tx, receiptUrl: result.receiptUrl } : tx))
+      );
+    });
+  };
+
   const value: AdminDataContextShape = {
     isBootstrapping,
     isSaving,
@@ -435,6 +392,7 @@ export const AdminDataProvider = ({ children }: { children: React.ReactNode }) =
     upsertAdmin,
     toggleAdminActive,
     recordExport,
+    uploadReceipt,
   };
 
   return <AdminDataContext.Provider value={value}>{children}</AdminDataContext.Provider>;

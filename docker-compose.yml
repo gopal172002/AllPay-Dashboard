@@ -1,0 +1,39 @@
+services:
+  mongodb:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - allpay_mongo_data:/data/db
+
+  localstack:
+    image: localstack/localstack:3
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=s3
+      - DEBUG=0
+    volumes:
+      - allpay_localstack_data:/var/lib/localstack
+
+  localstack-setup:
+    image: amazon/aws-cli:2.15.0
+    depends_on:
+      - localstack
+    environment:
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_DEFAULT_REGION=us-east-1
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        for i in 1 2 3 4 5 6 7 8 9 10; do
+          if aws --endpoint-url=http://localstack:4566 s3 ls 2>/dev/null; then break; fi
+          sleep 2
+        done
+        aws --endpoint-url=http://localstack:4566 s3 mb s3://receipts
+        echo "S3 bucket receipts is ready"
+
+volumes:
+  allpay_mongo_data:
+  allpay_localstack_data:

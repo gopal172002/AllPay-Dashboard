@@ -1,73 +1,86 @@
-# React + TypeScript + Vite
+# AllPay Dashboard
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Web dashboard and Node.js API for AllPay, with local infrastructure via **Docker** (MongoDB + LocalStack S3) and a full backend **Jest** API suite (S3 mocked).
 
-Currently, two official plugins are available:
+## Requirements
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- **Node.js** (current LTS recommended)
+- **Docker Desktop** (or compatible engine) for MongoDB and LocalStack
 
-## React Compiler
+## Infrastructure (Docker)
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+From the repository root, start the database and S3 simulator:
 
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+docker compose up -d
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+This starts:
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+- **MongoDB** on port `27017` (data persisted in a named volume)
+- **LocalStack** on port `4566` (S3 only)
+- **localstack-setup** — a one-off container that runs `aws s3 mb` against LocalStack to create the **`receipts`** bucket
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+The backend uses:
+
+- `MONGO_URI` — defaults to `mongodb://127.0.0.1:27017/allpay_db` if unset
+- `S3_ENDPOINT` — defaults to `http://127.0.0.1:4566` for the AWS S3 client (LocalStack)
+- `S3_PUBLIC_BASE` — optional; defaults to the same as `S3_ENDPOINT` for the URL stored on transactions
+
+**Note:** The backend S3 path-style URL format is: `{S3_PUBLIC_BASE}/receipts/{key}`.
+
+## Backend
+
+```bash
+cd backend
+npm install
+# With Docker (Mongo + LocalStack) already running:
+npm run dev
+# or
+npm start
 ```
+
+**Tests** — `api` integration tests use an in-process **MongoDB Memory Server** (no Docker required for tests) and **mock S3** uploads. To run tests against a live MongoDB on `MONGO_URI` instead, set `USE_LIVE_MONGO=1` (S3 is still mocked).
+
+```bash
+cd backend
+npm test
+# Optional: use real Mongo
+# USE_LIVE_MONGO=1 MONGO_URI=mongodb://127.0.0.1:27017/allpay_test npm test
+```
+
+**Environment (optional, `.env` in `backend/`)**
+
+| Variable            | Default / notes                                      |
+| ------------------- | ---------------------------------------------------- |
+| `PORT`              | `5000`                                               |
+| `MONGO_URI`         | `mongodb://127.0.0.1:27017/allpay_db`                |
+| `JWT_SECRET`        | Development default in code; set in production        |
+| `S3_ENDPOINT`       | `http://127.0.0.1:4566`                              |
+| `S3_PUBLIC_BASE`    | Same as `S3_ENDPOINT` if unset                     |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | `test` (LocalStack) |
+
+A seed user is created for manual checks: `test@example.com` / `password123`.
+
+## Frontend
+
+```bash
+npm install
+npm run dev
+```
+
+The Vite app reads `VITE_API_BASE_URL` (defaults to `http://localhost:5000/api`).
+
+**Receipt upload:** On an admin transaction detail page, use **Upload / replace receipt**; the file is sent to `POST /api/admin/transactions/:id/receipt` and the returned URL is shown after a successful upload (stored in MongoDB and, with Docker + LocalStack, in the `receipts` bucket).
+
+## Stopping Docker services
+
+```bash
+docker compose down
+```
+
+## Technology overview
+
+- **Frontend:** React, TypeScript, Vite, MUI
+- **Backend:** Express 5, Mongoose, JWT auth, AWS SDK S3 (LocalStack in development), Multer for multipart uploads
+- **Tests:** Jest, ts-jest, supertest, mongodb-memory-server, mocked S3 service

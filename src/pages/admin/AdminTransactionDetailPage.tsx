@@ -1,14 +1,16 @@
 import ContentCopy from "@mui/icons-material/ContentCopy";
 import Print from "@mui/icons-material/Print";
+import UploadFile from "@mui/icons-material/UploadFile";
 import { Box, Button, Card, CardContent, Chip, Divider, Stack, Typography } from "@mui/material";
 import dayjs from "dayjs";
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import { useParams } from "react-router-dom";
 import { useAdminData } from "../../context/AdminDataContext";
 
 export const AdminTransactionDetailPage = () => {
   const { id } = useParams();
-  const { transactions } = useAdminData();
+  const { transactions, uploadReceipt, isSaving, errorMessage } = useAdminData();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const transaction = useMemo(() => transactions.find((item) => item.id === id), [id, transactions]);
 
   if (!transaction) {
@@ -70,7 +72,41 @@ export const AdminTransactionDetailPage = () => {
             Receipt and location
           </Typography>
           <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
-            <img src={transaction.receiptUrl} alt="Receipt" style={{ maxWidth: "100%", borderRadius: 8 }} />
+            <Box>
+              {transaction.receiptUrl ? (
+                <img src={transaction.receiptUrl} alt="Receipt" style={{ maxWidth: "100%", borderRadius: 8 }} />
+              ) : (
+                <Typography color="text.secondary" sx={{ py: 2 }}>
+                  No receipt image on file. Upload a receipt image below.
+                </Typography>
+              )}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*,application/pdf"
+                style={{ display: "none" }}
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  if (!file || !id) return;
+                  await uploadReceipt(id, file);
+                }}
+              />
+              <Button
+                variant="outlined"
+                startIcon={<UploadFile />}
+                disabled={isSaving}
+                onClick={() => fileInputRef.current?.click()}
+                sx={{ mt: 1 }}
+              >
+                {isSaving ? "Uploading…" : "Upload / replace receipt"}
+              </Button>
+              {errorMessage ? (
+                <Typography color="error" variant="body2" sx={{ mt: 1 }}>
+                  {errorMessage}
+                </Typography>
+              ) : null}
+            </Box>
             <Box sx={{ minWidth: 280, p: 1.5, bgcolor: "#f4f6ff", borderRadius: 2 }}>
               <Typography fontWeight={700}>GPS map pin</Typography>
               <Typography variant="body2" color="text.secondary">
