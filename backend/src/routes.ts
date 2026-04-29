@@ -23,7 +23,13 @@ import {
 import { getAggregated, getDailySpend } from "./services/adminAnalyticsService";
 import type { TimelineBucket } from "./services/adminAnalyticsService";
 import { runPolicyPreview } from "./services/policyPreviewService";
-import type { ExpensePolicy } from "./services/analyticsTypes";
+import type { ExpensePolicy as PolicyPreviewBody } from "./services/analyticsTypes";
+import { mobileDeviceAuth, type MobileRequest } from "./middleware/mobileDeviceAuth";
+import {
+  mapMobileStatusToDashboard,
+  mobileTxToDashboardFields,
+  type MobileTransactionPayload
+} from "./services/mobileTransactionMapper";
 
 const router = express.Router();
 const upload = multer({
@@ -51,7 +57,7 @@ const authMiddleware = (req: express.Request, res: express.Response, next: expre
       email: string;
     };
     next();
-  } catch (err) {
+  } catch {
     return res.status(401).json({ message: "Invalid token" });
   }
 };
@@ -168,6 +174,210 @@ router.post("/auth/login", async (req, res) => {
   }
 });
 
+// --- MOBILE (AllpayEmployeeApp) — sync secret or employee JWT ---
+router.post("/mobile/auth/employee-token", async (req, res) => {
+  try {
+    const { employeeId, inviteToken } = req.body as {
+      employeeId?: string;
+      inviteToken?: string;
+    };
+    if (!employeeId?.trim() || !inviteToken?.trim()) {
+      return res.status(400).json({
+        ok: false,
+        message: "employeeId and inviteToken are required"
+      });
+    }
+    const emp = await Employee.findOne({
+      id: String(employeeId).trim(),
+      inviteToken: String(inviteToken).trim()
+    }).exec();
+    if (!emp) {
+      return res.status(401).json({ ok: false, message: "Invalid employeeId or inviteToken" });
+    }
+    const token = jwt.sign(
+      { typ: "employee", employeeId: emp.id },
+      JWT_SECRET,
+      { expiresIn: "60d" }
+    );
+    res.json({ ok: true, token, employeeId: emp.id });
+  } catch (error) {
+    res.status(500).json({ ok: false, message: (error as Error).message });
+  }
+});
+
+async function resolveEmployeeForMobileSync(
+  employeeId: string,
+  overrides?: { employeeName?: string; department?: string }
+): Promise<{ name: string; department: string } | null> {
+  const emp = await Employee.findOne({ id: employeeId }).exec();
+  if (emp) {
+    return { name: emp.name, department: emp.department };
+  }
+  const name = overrides?.employeeName?.trim();
+  if (name) {
+    return { name, department: overrides?.department?.trim() || "Unassigned" };
+  }
+  return null;
+}
+
+router.post("/mobile/transactions/sync", mobileDeviceAuth, async (req: MobileRequest, res) => {
+  try {
+    const body = req.body as {
+      transaction?: MobileTransactionPayload;
+      employeeName?: string;
+      department?: string;
+    };
+    const tx = body.transaction;
+    if (!tx?.id || !tx.employeeId || !tx.merchant) {
+      return res.status(400).json({
+        ok: false,
+        message: "transaction with id, employeeId, and merchant is required"
+      });
+    }
+    if (req.mobileEmployeeId && req.mobileEmployeeId !== tx.employeeId) {
+      return res.status(403).json({ ok: false, message: "Transaction employeeId does not match token" });
+    }
+
+    const syncOverrides: { employeeName?: string; department?: string } = {};
+    if (typeof body.employeeName === "string" && body.employeeName.trim()) {
+      syncOverrides.employeeName = body.employeeName.trim();
+    }
+    if (typeof body.department === "string" && body.department.trim()) {
+      syncOverrides.department = body.department.trim();
+    }
+    const resolved = await resolveEmployeeForMobileSync(
+      tx.employeeId,
+      Object.keys(syncOverrides).length > 0 ? syncOverrides : undefined
+    );
+    if (!resolved) {
+      return res.status(404).json({
+        ok: false,
+        message:
+          "Employee not found. Add them in the dashboard (invite/import) or pass employeeName and department in the sync body."
+      });
+    }
+
+    const fields = mobileTxToDashboardFields(tx, resolved.name, resolved.department);
+    const syncEvent = {
+      id: `mob-${Date.now().toString(36)}`,
+      actor: "Employee app",
+      action: "Synced from mobile",
+      timestamp: dayjs().toISOString()
+    };
+
+    const existing = await Transaction.findOne({ id: tx.id }).exec();
+    if (existing && (existing.status === "approved" || existing.status === "rejected")) {
+      if (typeof fields.merchantVpa === "string") {
+        existing.merchantVpa = fields.merchantVpa;
+      }
+      if (typeof fields.reimbursementNote === "string") {
+        existing.reimbursementNote = fields.reimbursementNote;
+      }
+      if (typeof fields.policyWarning === "string") {
+        existing.policyWarning = fields.policyWarning;
+      }
+      if (typeof fields.warningAcknowledged === "boolean") {
+        existing.warningAcknowledged = fields.warningAcknowledged;
+      }
+      if (fields.mobileLocation !== undefined) {
+        existing.mobileLocation = fields.mobileLocation;
+      }
+      if (Array.isArray(fields.mobileReceipts)) {
+        existing.mobileReceipts = fields.mobileReceipts;
+      }
+      if (typeof fields.lastSyncedFromMobileAt === "string") {
+        existing.lastSyncedFromMobileAt = fields.lastSyncedFromMobileAt;
+      }
+      existing.timeline.push(syncEvent);
+      await existing.save();
+      return res.json({ ok: true, backendId: existing.id });
+    }
+
+    if (existing) {
+      Object.assign(existing, fields);
+      existing.timeline.push(syncEvent);
+      await existing.save();
+      return res.json({ ok: true, backendId: existing.id });
+    }
+
+    const created = new Transaction({
+      ...fields,
+      timeline: [syncEvent]
+    });
+    await created.save();
+    res.json({ ok: true, backendId: created.id });
+  } catch (error) {
+    res.status(500).json({ ok: false, message: (error as Error).message });
+  }
+});
+
+router.patch("/mobile/transactions/:id", mobileDeviceAuth, async (req: MobileRequest, res) => {
+  try {
+    const idParam = req.params["id"];
+    const transactionId = Array.isArray(idParam) ? idParam[0] : idParam;
+    if (!transactionId) {
+      return res.status(400).json({ ok: false, message: "Missing transaction id" });
+    }
+
+    const body = req.body as {
+      employeeId?: string;
+      status?: string;
+      reimbursementPurpose?: string;
+      reimbursementNote?: string;
+      receipts?: MobileTransactionPayload["receipts"];
+      location?: MobileTransactionPayload["location"];
+      employeeName?: string;
+      department?: string;
+    };
+
+    if (req.mobileEmployeeId && body.employeeId && req.mobileEmployeeId !== body.employeeId) {
+      return res.status(403).json({ ok: false, message: "employeeId does not match token" });
+    }
+
+    const tx = await Transaction.findOne({ id: transactionId }).exec();
+    if (!tx) {
+      return res.status(404).json({ ok: false, message: "Transaction not found" });
+    }
+
+    if (req.mobileEmployeeId && tx.employeeId !== req.mobileEmployeeId) {
+      return res.status(403).json({ ok: false, message: "Not allowed to update this transaction" });
+    }
+
+    const empStill = await Employee.findOne({ id: tx.employeeId }).exec();
+    if (!empStill) {
+      return res.status(404).json({ ok: false, message: "Employee context missing" });
+    }
+
+    if (body.status) {
+      tx.status = mapMobileStatusToDashboard(body.status);
+    }
+    if (body.reimbursementPurpose?.trim()) {
+      tx.purposeCategory = body.reimbursementPurpose.trim();
+    }
+    if (body.reimbursementNote !== undefined) {
+      tx.reimbursementNote = body.reimbursementNote;
+    }
+    if (body.receipts) {
+      tx.mobileReceipts = body.receipts;
+    }
+    if (body.location !== undefined) {
+      tx.mobileLocation = body.location;
+    }
+
+    tx.lastSyncedFromMobileAt = dayjs().toISOString();
+    tx.timeline.push({
+      id: `mob-${Date.now().toString(36)}`,
+      actor: "Employee app",
+      action: "Updated from mobile (patch)",
+      timestamp: dayjs().toISOString()
+    });
+    await tx.save();
+    res.json({ ok: true, backendId: tx.id });
+  } catch (error) {
+    res.status(500).json({ ok: false, message: (error as Error).message });
+  }
+});
+
 // --- ADMIN (JWT + active AdminUser record) ---
 router.use("/admin", authMiddleware, requireAdminUser);
 
@@ -175,7 +385,7 @@ router.get("/admin/bootstrap", async (req, res) => {
   try {
     const [txBlock, employees, policies, alertsConfigArr, admins, billingArr, exportAudits] =
       await Promise.all([
-        listTransactionsFromQuery(req.query as any, { bootstrapDefaultLimit: getDefaultBootstrapTxLimit() }),
+        listTransactionsFromQuery(req.query as Record<string, string | string[] | undefined>, { bootstrapDefaultLimit: getDefaultBootstrapTxLimit() }),
         Employee.find().exec(),
         ExpensePolicy.find().exec(),
         AlertConfig.find().exec(),
@@ -214,7 +424,7 @@ router.get("/admin/bootstrap", async (req, res) => {
 router.get("/admin/transactions", async (req, res) => {
   try {
     const { transactions, transactionPage, transactionPageSize, transactionTotal, hasMoreTransactions } =
-      await listTransactionsFromQuery({ ...req.query } as any, {});
+      await listTransactionsFromQuery({ ...req.query } as Record<string, string | string[] | undefined>, {});
     res.json({ transactions, transactionPage, transactionPageSize, transactionTotal, hasMoreTransactions });
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
@@ -254,7 +464,7 @@ router.get("/admin/analytics/aggregated", R_ANAL, async (req, res) => {
 /** ADM-003: simulate a policy over stored transactions (policy effective dates apply in-engine) */
 router.post("/admin/policies/preview", R_FIN, async (req, res) => {
   try {
-    const policy = req.body as ExpensePolicy;
+    const policy = req.body as PolicyPreviewBody;
     if (!policy || typeof policy !== "object") {
       return res.status(400).json({ error: "Policy body required" });
     }
@@ -346,7 +556,11 @@ router.post(
   upload.single("receipt"),
   async (req, res) => {
     try {
-      const { id } = req.params;
+      const rawId = req.params["id"];
+      const id = Array.isArray(rawId) ? rawId[0] : rawId;
+      if (!id || typeof id !== "string") {
+        return res.status(400).json({ error: "Missing transaction id" });
+      }
       if (!req.file) {
         return res.status(400).json({ error: "No file uploaded" });
       }

@@ -37,11 +37,11 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(readSession);
   const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
-    setUser(readSession());
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setIsReady(true);
   }, []);
 
@@ -58,7 +58,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       writeSession(data.user, data.token);
       setUser(data.user);
       return { ok: true as const };
-    } catch (err) {
+    } catch {
       return { ok: false as const, message: "Network error" };
     }
   }, []);
@@ -76,7 +76,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       writeSession(data.user, data.token);
       setUser(data.user);
       return { ok: true as const };
-    } catch (err) {
+    } catch {
       return { ok: false as const, message: "Network error" };
     }
   }, []);
@@ -94,6 +94,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useAuth() {
   const ctx = useContext(AuthContext);
   if (!ctx) throw new Error("useAuth must be used within AuthProvider");

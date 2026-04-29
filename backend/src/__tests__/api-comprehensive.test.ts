@@ -16,15 +16,13 @@ import request from "supertest";
 import jwt from "jsonwebtoken";
 import { app } from "../server";
 import { seedDatabase } from "../seed";
-import { Transaction, Employee, AdminUser, ExpensePolicy, AlertConfig, BillingPlan, ExportAudit } from "../models";
+import { Transaction, AdminUser, AlertConfig, BillingPlan } from "../models";
 import { uploadFile } from "../services/s3Service";
 
 const authHeader = (token: string) => ({ Authorization: `Bearer ${token}` });
 
 describe("AllPay Comprehensive API Tests", () => {
   let superAdminToken: string;
-  let financeManagerToken: string;
-  let hrManagerToken: string;
   let auditorToken: string;
   let regularUserToken: string;
   let memoryMongo: MongoMemoryServer | null = null;
@@ -346,7 +344,7 @@ describe("AllPay Comprehensive API Tests", () => {
         .get("/api/admin/transactions?status=pending")
         .set(authHeader(superAdminToken));
       expect(res.status).toBe(200);
-      res.body.transactions.forEach((tx: any) => {
+      res.body.transactions.forEach((tx: { status: string }) => {
         expect(tx.status).toBe("pending");
       });
     });
@@ -356,7 +354,7 @@ describe("AllPay Comprehensive API Tests", () => {
         .get("/api/admin/transactions?flagged=1")
         .set(authHeader(superAdminToken));
       expect(res.status).toBe(200);
-      res.body.transactions.forEach((tx: any) => {
+      res.body.transactions.forEach((tx: { status: string }) => {
         expect(tx.status).toBe("flagged");
       });
     });
@@ -366,7 +364,7 @@ describe("AllPay Comprehensive API Tests", () => {
         .get("/api/admin/transactions?employeeId=EMP-1000")
         .set(authHeader(superAdminToken));
       expect(res.status).toBe(200);
-      res.body.transactions.forEach((tx: any) => {
+      res.body.transactions.forEach((tx: { employeeId: string }) => {
         expect(tx.employeeId).toBe("EMP-1000");
       });
     });
@@ -376,7 +374,7 @@ describe("AllPay Comprehensive API Tests", () => {
         .get("/api/admin/transactions?department=Engineering")
         .set(authHeader(superAdminToken));
       expect(res.status).toBe(200);
-      res.body.transactions.forEach((tx: any) => {
+      res.body.transactions.forEach((tx: { department: string }) => {
         expect(tx.department).toBe("Engineering");
       });
     });
@@ -386,7 +384,7 @@ describe("AllPay Comprehensive API Tests", () => {
         .get("/api/admin/transactions?category=Travel")
         .set(authHeader(superAdminToken));
       expect(res.status).toBe(200);
-      res.body.transactions.forEach((tx: any) => {
+      res.body.transactions.forEach((tx: { category: string }) => {
         expect(tx.category).toBe("Travel");
       });
     });
@@ -396,7 +394,7 @@ describe("AllPay Comprehensive API Tests", () => {
         .get("/api/admin/transactions?minAmount=100&maxAmount=1000")
         .set(authHeader(superAdminToken));
       expect(res.status).toBe(200);
-      res.body.transactions.forEach((tx: any) => {
+      res.body.transactions.forEach((tx: { amount: number }) => {
         expect(tx.amount).toBeGreaterThanOrEqual(100);
         expect(tx.amount).toBeLessThanOrEqual(1000);
       });
@@ -483,7 +481,7 @@ describe("AllPay Comprehensive API Tests", () => {
       expect(res.status).toBe(200);
       expect(res.body.ok).toBe(true);
       
-      const updatedTx = await Transaction.findOne({ id: tx?.id });
+      const updatedTx = await Transaction.findOne({ id: tx!.id });
       expect(updatedTx?.status).toBe("approved");
       expect(updatedTx?.adminDecision).toContain("Approved in full");
     });
@@ -496,7 +494,7 @@ describe("AllPay Comprehensive API Tests", () => {
         .send({ transactionId: tx?.id, amount: 300 });
       expect(res.status).toBe(200);
       
-      const updatedTx = await Transaction.findOne({ id: tx?.id });
+      const updatedTx = await Transaction.findOne({ id: tx!.id });
       expect(updatedTx?.status).toBe("approved");
       expect(updatedTx?.claimedAmount).toBe(300);
       expect(updatedTx?.adminDecision).toContain("Partial approval");
@@ -511,7 +509,7 @@ describe("AllPay Comprehensive API Tests", () => {
       expect(res.status).toBe(200);
       expect(res.body.ok).toBe(true);
       
-      const updatedTx = await Transaction.findOne({ id: tx?.id });
+      const updatedTx = await Transaction.findOne({ id: tx!.id });
       expect(updatedTx?.status).toBe("rejected");
       expect(updatedTx?.adminDecision).toContain("Policy violation");
     });
@@ -531,9 +529,9 @@ describe("AllPay Comprehensive API Tests", () => {
         .set(authHeader(superAdminToken))
         .send({ transactionId: tx?.id, amount: tx?.amount });
       
-      const updatedTx = await Transaction.findOne({ id: tx?.id });
+      const updatedTx = await Transaction.findOne({ id: tx!.id });
       expect(updatedTx?.timeline.length).toBeGreaterThan(0);
-      expect(updatedTx?.timeline[0].action).toContain("Admin reviewed");
+      expect((updatedTx?.timeline ?? [])[0]?.action).toContain("Admin reviewed");
     });
 
     it("should handle bulk approval", async () => {
@@ -1008,7 +1006,7 @@ describe("AllPay Comprehensive API Tests", () => {
       expect(res.status).toBe(200);
       expect(res.body.ok).toBe(true);
       
-      const admin = await AdminUser.findOne({ id: "ADM-1" });
+      await AdminUser.findOne({ id: "ADM-1" });
       // Toggle back
       await request(app)
         .post("/api/admin/users/ADM-1/toggle")

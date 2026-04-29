@@ -101,6 +101,14 @@ export interface ITransaction extends Document {
   hasMatchingAllpayRecord: boolean;
   purposeCategory: string;
   timeline: Array<{ id: string; actor: string; action: string; timestamp: string }>;
+  /** UPI payee address from employee app */
+  merchantVpa?: string;
+  reimbursementNote?: string;
+  policyWarning?: string;
+  warningAcknowledged?: boolean;
+  mobileLocation?: unknown;
+  mobileReceipts?: unknown[];
+  lastSyncedFromMobileAt?: string;
 }
 
 const TransactionSchema = new Schema<ITransaction>({
@@ -118,13 +126,22 @@ const TransactionSchema = new Schema<ITransaction>({
   upiApp: { type: String, required: true },
   upiRefId: { type: String, required: true },
   isNewTx: { type: Boolean, default: true },
-  flags: { type: [Schema.Types.Mixed], default: [] },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  flags: ({ type: [Schema.Types.Mixed], default: [] }) as any,
   adminDecision: { type: String },
   adminDecisionAt: { type: String },
   receiptUrl: { type: String },
   hasMatchingAllpayRecord: { type: Boolean, default: false },
   purposeCategory: { type: String, required: true },
-  timeline: { type: [Schema.Types.Mixed], default: [] },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  timeline: ({ type: [Schema.Types.Mixed], default: [] }) as any,
+  merchantVpa: { type: String },
+  reimbursementNote: { type: String },
+  policyWarning: { type: String },
+  warningAcknowledged: { type: Boolean },
+  mobileLocation: { type: Schema.Types.Mixed },
+  mobileReceipts: { type: [Schema.Types.Mixed], default: [] },
+  lastSyncedFromMobileAt: { type: String },
 });
 
 export const Transaction = mongoose.model<ITransaction>('Transaction', TransactionSchema);

@@ -39,7 +39,7 @@ export const AdminPoliciesPage = () => {
   const [serverPreview, setServerPreview] = useState<PolicyPreviewResponse | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState("");
-  const [policy, setPolicy] = useState<ExpensePolicy>({
+  const [policy, setPolicy] = useState<ExpensePolicy>(() => ({
     id: `POL-${Date.now()}`,
     name: "",
     mccCategory: "Travel",
@@ -51,7 +51,7 @@ export const AdminPoliciesPage = () => {
     startDate: dayjs().format("YYYY-MM-DD"),
     endDate: "",
     active: true,
-  });
+  }));
 
   useEffect(() => {
     const t = window.setTimeout(() => {

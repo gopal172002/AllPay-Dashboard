@@ -386,4 +386,136 @@ describe("AllPay API", () => {
       .set(authHeader(bad));
     expect(res.status).toBe(401);
   });
+
+  it("POST /api/mobile/transactions/sync upserts for seed employee", async () => {
+    const id = `TX-MOB-${Date.now()}`;
+    const res = await request(app)
+      .post("/api/mobile/transactions/sync")
+      .send({
+        transaction: {
+          id,
+          employeeId: "EMP-1000",
+          merchant: {
+            vpa: "merchant@upi",
+            name: "Test Store",
+            category: "food",
+            mcc: "5812"
+          },
+          amount: 99.5,
+          timestamp: new Date().toISOString(),
+          upiApp: "Google Pay",
+          upiRefId: "UPI-MOB-1",
+          status: "Recorded",
+          receipts: [],
+          location: null
+        }
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.backendId).toBe(id);
+    const doc = await Transaction.findOne({ id });
+    expect(doc).toBeTruthy();
+    expect(doc?.merchantName).toBe("Test Store");
+    expect(doc?.status).toBe("pending");
+    expect(doc?.merchantVpa).toBe("merchant@upi");
+  });
+
+  it("POST /api/mobile/transactions/sync 404 when employee unknown and no profile override", async () => {
+    const id = `TX-MOB-X-${Date.now()}`;
+    const res = await request(app)
+      .post("/api/mobile/transactions/sync")
+      .send({
+        transaction: {
+          id,
+          employeeId: "EMP-NONEXISTENT",
+          merchant: {
+            vpa: "x@upi",
+            name: "X",
+            category: "office",
+            mcc: "5999"
+          },
+          amount: 1,
+          timestamp: new Date().toISOString(),
+          upiApp: "PhonePe",
+          status: "Recorded"
+        }
+      });
+    expect(res.status).toBe(404);
+  });
+
+  it("POST /api/mobile/transactions/sync uses employeeName override when employee not in DB", async () => {
+    const id = `TX-MOB-OVR-${Date.now()}`;
+    const res = await request(app)
+      .post("/api/mobile/transactions/sync")
+      .send({
+        transaction: {
+          id,
+          employeeId: "EMP-OVR-ONLY",
+          merchant: {
+            vpa: "m@upi",
+            name: "Store",
+            category: "food",
+            mcc: "5812"
+          },
+          amount: 10,
+          timestamp: new Date().toISOString(),
+          upiApp: "Paytm",
+          status: "Recorded"
+        },
+        employeeName: "Override User",
+        department: "QA"
+      });
+    expect(res.status).toBe(200);
+    const doc = await Transaction.findOne({ id });
+    expect(doc?.employeeName).toBe("Override User");
+    expect(doc?.department).toBe("QA");
+  });
+
+  it("POST /api/mobile/auth/employee-token returns JWT for valid invite", async () => {
+    const inviteRes = await request(app)
+      .post("/api/admin/employees/invite")
+      .set(authHeader(token))
+      .send({ email: "mobile-invite@test.local", name: "Mobile User" });
+    expect(inviteRes.status).toBe(200);
+    const emp = inviteRes.body.employee as { id: string; inviteToken: string };
+    const tokRes = await request(app)
+      .post("/api/mobile/auth/employee-token")
+      .send({ employeeId: emp.id, inviteToken: emp.inviteToken });
+    expect(tokRes.status).toBe(200);
+    expect(tokRes.body.token).toBeTruthy();
+  });
+
+  it("POST /api/mobile/auth/employee-token returns 401 for invalid inviteToken", async () => {
+    const res = await request(app)
+      .post("/api/mobile/auth/employee-token")
+      .send({ employeeId: "EMP-1000", inviteToken: "invalid-token" });
+    expect(res.status).toBe(401);
+  });
+
+  it("PATCH /api/mobile/transactions/:id updates reimbursement fields", async () => {
+    const id = `TX-MOB-PATCH-${Date.now()}`;
+    await request(app)
+      .post("/api/mobile/transactions/sync")
+      .send({
+        transaction: {
+          id,
+          employeeId: "EMP-1000",
+          merchant: { vpa: "a@b", name: "M", category: "food", mcc: "5812" },
+          amount: 50,
+          timestamp: new Date().toISOString(),
+          upiApp: "Google Pay",
+          status: "Recorded"
+        }
+      });
+    const patch = await request(app)
+      .patch(`/api/mobile/transactions/${encodeURIComponent(id)}`)
+      .send({
+        reimbursementPurpose: "Client lunch",
+        reimbursementNote: "With ACME"
+      });
+    expect(patch.status).toBe(200);
+    const doc = await Transaction.findOne({ id });
+    expect(doc?.purposeCategory).toBe("Client lunch");
+    expect(doc?.reimbursementNote).toBe("With ACME");
+  });
 });

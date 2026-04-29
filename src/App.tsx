@@ -16,6 +16,7 @@ import { AdminTransactionsPage } from "./pages/admin/AdminTransactionsPage";
 import { HomePage } from "./pages/HomePage";
 import { LoginPage } from "./pages/auth/LoginPage";
 import { SignUpPage } from "./pages/auth/SignUpPage";
+import { ApiSmokePage } from "./pages/dev/ApiSmokePage";
 
 const theme = createTheme({
   palette: {
@@ -39,6 +40,7 @@ function App() {
           <Route path="/home" element={<Navigate to="/" replace />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/signup" element={<SignUpPage />} />
+          {import.meta.env.DEV ? <Route path="/dev/api-smoke" element={<ApiSmokePage />} /> : null}
 
           <Route path="/admin" element={<ProtectedLayout />}>
             <Route element={<AdminLayout />}>

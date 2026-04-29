@@ -15,7 +15,11 @@ import bcrypt from 'bcryptjs';
 export async function seedDatabase() {
   const adminCount = await AdminUser.countDocuments();
   if (adminCount > 0) {
-    console.log('Database already seeded');
+    await Employee.updateOne(
+      { id: "EMP-1000" },
+      { $set: { inviteToken: "seed-invite-emp1000" } }
+    );
+    console.log("Database already seeded");
     return;
   }
 
@@ -57,7 +61,15 @@ export async function seedDatabase() {
   await AdminUser.insertMany(admins);
 
   const employees = [
-    { id: "EMP-1000", name: "Employee 1", email: "emp1@allpay.in", department: "Engineering", role: "manager", active: true },
+    {
+      id: "EMP-1000",
+      name: "Employee 1",
+      email: "emp1@allpay.in",
+      department: "Engineering",
+      role: "manager",
+      active: true,
+      inviteToken: "seed-invite-emp1000"
+    },
     { id: "EMP-1001", name: "Employee 2", email: "emp2@allpay.in", department: "Sales", role: "employee", active: true },
     { id: "EMP-1002", name: "Employee 3", email: "emp3@allpay.in", department: "HR", role: "employee", active: true },
   ];

@@ -385,6 +385,7 @@ export const AdminDataProvider = ({ children }: { children: React.ReactNode }) =
   return <AdminDataContext.Provider value={value}>{children}</AdminDataContext.Provider>;
 };
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const useAdminData = () => {
   const context = useContext(AdminDataContext);
   if (!context) throw new Error("useAdminData must be used within AdminDataProvider");

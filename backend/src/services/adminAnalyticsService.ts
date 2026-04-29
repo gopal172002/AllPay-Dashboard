@@ -207,7 +207,7 @@ export async function getDailySpend(dateYmd: string | undefined) {
   const raw = await Transaction.find({ dateTime: { $gte: gte, $lte: lte } })
     .select("amount dateTime category status flags employeeId employeeName")
     .lean();
-  const rows = (raw as unknown as LeanTx[]).map((t) => toLean(t as any));
+  const rows = (raw as unknown as LeanTx[]).map((t) => toLean(t));
   return computeDailySpendFromTxs(rows, ymd);
 }
 
@@ -226,7 +226,7 @@ export async function getAggregated(
   const raw = await Transaction.find({ dateTime: { $gte: gte, $lte: lte } })
     .select("amount dateTime category status flags employeeId employeeName")
     .lean();
-  const rows = (raw as unknown as LeanTx[]).map((t) => toLean(t as any));
+  const rows = (raw as unknown as LeanTx[]).map((t) => toLean(t));
   return computeAggregatedFromTxs(
     rows,
     s.toISOString(),

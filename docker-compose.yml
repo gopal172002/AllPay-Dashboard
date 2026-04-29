@@ -5,6 +5,12 @@ services:
       - "27017:27017"
     volumes:
       - allpay_mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand({ ping: 1 }).ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
 
   localstack:
     image: localstack/localstack:3
@@ -33,6 +39,37 @@ services:
         done
         aws --endpoint-url=http://localstack:4566 s3 mb s3://receipts
         echo "S3 bucket receipts is ready"
+
+  backend:
+    build: ./backend
+    # API is available at http://localhost:5173/api via the frontend proxy.
+    # Uncomment to also expose the API directly (e.g. Postman):
+    # ports:
+    #   - "5000:5000"
+    environment:
+      PORT: "5000"
+      MONGO_URI: mongodb://mongodb:27017/allpay_db
+      S3_ENDPOINT: http://localstack:4566
+      # Browser-accessible URLs for stored receipt links (host port is published)
+      S3_PUBLIC_BASE: http://localhost:4566
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      localstack:
+        condition: service_started
+      localstack-setup:
+        condition: service_completed_successfully
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        VITE_API_BASE_URL: /api
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
 
 volumes:
   allpay_mongo_data:
