@@ -1,3 +1,13 @@
+export type PaymentStatus =
+  | "draft"
+  | "order_created"
+  | "checkout_opened"
+  | "payment_processing"
+  | "payment_captured"
+  | "payment_failed"
+  | "payment_abandoned"
+  | "legacy_simulated";
+
 export type TransactionStatus = "pending" | "approved" | "rejected" | "flagged";
 export type AdminRole = "super_admin" | "finance_manager" | "hr_manager" | "auditor";
 
@@ -50,6 +60,17 @@ export interface Transaction {
   hasMatchingAllpayRecord: boolean;
   purposeCategory: string;
   timeline: TimelineEvent[];
+  paymentStatus?: PaymentStatus;
+  razorpayOrderId?: string;
+  razorpayPaymentId?: string;
+  merchantVpa?: string;
+}
+
+export function isExpensePaymentVerified(tx: Pick<Transaction, "paymentStatus">): boolean {
+  if (!tx.paymentStatus || tx.paymentStatus === "legacy_simulated") {
+    return true;
+  }
+  return tx.paymentStatus === "payment_captured";
 }
 
 export interface ExpensePolicy {

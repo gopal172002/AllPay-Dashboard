@@ -109,6 +109,15 @@ export interface ITransaction extends Document {
   mobileLocation?: unknown;
   mobileReceipts?: unknown[];
   lastSyncedFromMobileAt?: string;
+  paymentStatus?: string;
+  razorpayOrderId?: string;
+  razorpayPaymentId?: string;
+  orderAmountPaise?: number;
+  capturedAmountPaise?: number;
+  paymentMethod?: string;
+  paymentFailedReason?: string;
+  paymentConfirmedAt?: string;
+  razorpayWebhookEventIds?: string[];
 }
 
 const TransactionSchema = new Schema<ITransaction>({
@@ -142,6 +151,15 @@ const TransactionSchema = new Schema<ITransaction>({
   mobileLocation: { type: Schema.Types.Mixed },
   mobileReceipts: { type: [Schema.Types.Mixed], default: [] },
   lastSyncedFromMobileAt: { type: String },
+  paymentStatus: { type: String, default: "draft" },
+  razorpayOrderId: { type: String },
+  razorpayPaymentId: { type: String },
+  orderAmountPaise: { type: Number },
+  capturedAmountPaise: { type: Number },
+  paymentMethod: { type: String },
+  paymentFailedReason: { type: String },
+  paymentConfirmedAt: { type: String },
+  razorpayWebhookEventIds: { type: [String], default: [] },
 });
 
 export const Transaction = mongoose.model<ITransaction>('Transaction', TransactionSchema);
@@ -233,3 +251,21 @@ const ExportAuditSchema = new Schema<IExportAudit>({
 });
 
 export const ExportAudit = mongoose.model<IExportAudit>('ExportAudit', ExportAuditSchema);
+
+// Processed Razorpay webhook events (idempotency)
+export interface IProcessedWebhookEvent extends Document {
+  eventId: string;
+  eventType: string;
+  processedAt: string;
+}
+
+const ProcessedWebhookEventSchema = new Schema<IProcessedWebhookEvent>({
+  eventId: { type: String, required: true, unique: true },
+  eventType: { type: String, required: true },
+  processedAt: { type: String, required: true },
+});
+
+export const ProcessedWebhookEvent = mongoose.model<IProcessedWebhookEvent>(
+  'ProcessedWebhookEvent',
+  ProcessedWebhookEventSchema
+);

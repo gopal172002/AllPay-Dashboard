@@ -52,6 +52,10 @@ services:
       S3_ENDPOINT: http://localstack:4566
       # Browser-accessible URLs for stored receipt links (host port is published)
       S3_PUBLIC_BASE: http://localhost:4566
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
+      RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET:-}
+      USE_RAZORPAY_UPI: ${USE_RAZORPAY_UPI:-false}
     depends_on:
       mongodb:
         condition: service_healthy

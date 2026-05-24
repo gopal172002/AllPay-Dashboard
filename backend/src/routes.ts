@@ -30,6 +30,18 @@ import {
   mobileTxToDashboardFields,
   type MobileTransactionPayload
 } from "./services/mobileTransactionMapper";
+import {
+  canSubmitReimbursement,
+  mergeMobileSyncFields,
+  reimbursementBlockedMessage
+} from "./services/paymentFieldGuard";
+import {
+  confirmRazorpayPayment,
+  createRazorpayOrder,
+  handleRazorpayWebhookEvent,
+  markCheckoutOpened
+} from "./services/razorpayService";
+import { type PaymentStatus } from "./services/razorpayConfig";
 
 const router = express.Router();
 const upload = multer({
@@ -220,6 +232,161 @@ async function resolveEmployeeForMobileSync(
   return null;
 }
 
+router.post("/mobile/payments/create-order", mobileDeviceAuth, async (req: MobileRequest, res) => {
+  try {
+    const body = req.body as {
+      txId?: string;
+      amount?: number;
+      employeeId?: string;
+      merchant?: {
+        vpa?: string;
+        name?: string;
+        category?: string;
+        mcc?: string;
+        amount?: number;
+      };
+      upiApp?: string;
+      employeeName?: string;
+      department?: string;
+    };
+
+    const txId = body.txId?.trim();
+    const employeeId = body.employeeId?.trim();
+    if (!txId || !employeeId || !body.merchant?.vpa) {
+      return res.status(400).json({
+        ok: false,
+        message: "txId, employeeId, and merchant.vpa are required"
+      });
+    }
+    if (req.mobileEmployeeId && req.mobileEmployeeId !== employeeId) {
+      return res.status(403).json({ ok: false, message: "employeeId does not match token" });
+    }
+
+    const amount = Number(body.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ ok: false, message: "Valid amount is required" });
+    }
+
+    const resolved = await resolveEmployeeForMobileSync(employeeId, {
+      employeeName: body.employeeName,
+      department: body.department
+    });
+    if (!resolved) {
+      return res.status(404).json({ ok: false, message: "Employee not found" });
+    }
+
+    const result = await createRazorpayOrder({
+      txId,
+      amount,
+      employeeId,
+      employeeName: resolved.name,
+      department: resolved.department,
+      merchant: {
+        vpa: body.merchant.vpa,
+        name: body.merchant.name ?? "Unknown",
+        category: body.merchant.category ?? "office",
+        mcc: body.merchant.mcc ?? "5999",
+        amount: body.merchant.amount
+      },
+      upiApp: body.upiApp
+    });
+
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    const statusCode = (error as Error & { statusCode?: number }).statusCode;
+    if (statusCode === 409) {
+      return res.status(409).json({ ok: false, message: (error as Error).message });
+    }
+    if ((error as Error).message.includes("Razorpay")) {
+      return res.status(502).json({ ok: false, message: (error as Error).message });
+    }
+    res.status(500).json({ ok: false, message: (error as Error).message });
+  }
+});
+
+router.post("/mobile/payments/confirm", mobileDeviceAuth, async (req: MobileRequest, res) => {
+  try {
+    const body = req.body as {
+      txId?: string;
+      razorpay_order_id?: string;
+      razorpay_payment_id?: string;
+      razorpay_signature?: string;
+    };
+    if (!body.txId || !body.razorpay_order_id || !body.razorpay_payment_id || !body.razorpay_signature) {
+      return res.status(400).json({
+        ok: false,
+        message: "txId, razorpay_order_id, razorpay_payment_id, and razorpay_signature are required"
+      });
+    }
+
+    const tx = await confirmRazorpayPayment({
+      txId: body.txId,
+      razorpay_order_id: body.razorpay_order_id,
+      razorpay_payment_id: body.razorpay_payment_id,
+      razorpay_signature: body.razorpay_signature
+    });
+
+    if (req.mobileEmployeeId && req.mobileEmployeeId !== tx.employeeId) {
+      return res.status(403).json({ ok: false, message: "Not allowed" });
+    }
+
+    res.json({
+      ok: true,
+      paymentStatus: tx.paymentStatus,
+      razorpayPaymentId: tx.razorpayPaymentId
+    });
+  } catch (error) {
+    const statusCode = (error as Error & { statusCode?: number }).statusCode ?? 500;
+    res.status(statusCode).json({ ok: false, message: (error as Error).message });
+  }
+});
+
+router.post("/mobile/payments/checkout-opened", mobileDeviceAuth, async (req: MobileRequest, res) => {
+  try {
+    const txId = (req.body as { txId?: string }).txId?.trim();
+    if (!txId) {
+      return res.status(400).json({ ok: false, message: "txId is required" });
+    }
+  const tx = await Transaction.findOne({ id: txId }).exec();
+    if (!tx) {
+      return res.status(404).json({ ok: false, message: "Transaction not found" });
+    }
+    if (req.mobileEmployeeId && req.mobileEmployeeId !== tx.employeeId) {
+      return res.status(403).json({ ok: false, message: "Not allowed" });
+    }
+    await markCheckoutOpened(txId);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ ok: false, message: (error as Error).message });
+  }
+});
+
+router.get("/mobile/transactions/:id/payment-status", mobileDeviceAuth, async (req: MobileRequest, res) => {
+  try {
+    const idParam = req.params["id"];
+    const transactionId = Array.isArray(idParam) ? idParam[0] : idParam;
+    if (!transactionId) {
+      return res.status(400).json({ ok: false, message: "Missing transaction id" });
+    }
+    const tx = await Transaction.findOne({ id: transactionId }).exec();
+    if (!tx) {
+      return res.status(404).json({ ok: false, message: "Transaction not found" });
+    }
+    if (req.mobileEmployeeId && req.mobileEmployeeId !== tx.employeeId) {
+      return res.status(403).json({ ok: false, message: "Not allowed" });
+    }
+    res.json({
+      ok: true,
+      paymentStatus: tx.paymentStatus ?? "draft",
+      razorpayPaymentId: tx.razorpayPaymentId ?? null,
+      razorpayOrderId: tx.razorpayOrderId ?? null,
+      expenseStatus: tx.status
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, message: (error as Error).message });
+  }
+});
+
 router.post("/mobile/transactions/sync", mobileDeviceAuth, async (req: MobileRequest, res) => {
   try {
     const body = req.body as {
@@ -294,10 +461,16 @@ router.post("/mobile/transactions/sync", mobileDeviceAuth, async (req: MobileReq
     }
 
     if (existing) {
-      Object.assign(existing, fields);
+      const merged = mergeMobileSyncFields(existing, fields);
+      Object.assign(existing, merged);
       existing.timeline.push(syncEvent);
       await existing.save();
-      return res.json({ ok: true, backendId: existing.id });
+      return res.json({
+        ok: true,
+        backendId: existing.id,
+        paymentStatus: existing.paymentStatus,
+        razorpayPaymentId: existing.razorpayPaymentId ?? null
+      });
     }
 
     const created = new Transaction({
@@ -305,7 +478,12 @@ router.post("/mobile/transactions/sync", mobileDeviceAuth, async (req: MobileReq
       timeline: [syncEvent]
     });
     await created.save();
-    res.json({ ok: true, backendId: created.id });
+    res.json({
+      ok: true,
+      backendId: created.id,
+      paymentStatus: created.paymentStatus,
+      razorpayPaymentId: created.razorpayPaymentId ?? null
+    });
   } catch (error) {
     res.status(500).json({ ok: false, message: (error as Error).message });
   }
@@ -349,6 +527,15 @@ router.patch("/mobile/transactions/:id", mobileDeviceAuth, async (req: MobileReq
     }
 
     if (body.status) {
+      if (
+        body.status === "Pending Approval" &&
+        !canSubmitReimbursement(tx.paymentStatus as PaymentStatus | undefined)
+      ) {
+        return res.status(409).json({
+          ok: false,
+          message: reimbursementBlockedMessage(tx.paymentStatus as PaymentStatus | undefined)
+        });
+      }
       tx.status = mapMobileStatusToDashboard(body.status);
     }
     if (body.reimbursementPurpose?.trim()) {

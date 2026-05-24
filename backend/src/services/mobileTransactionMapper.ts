@@ -41,6 +41,9 @@ export type MobileTransactionPayload = {
   warningAcknowledged?: boolean;
   receipts?: MobileReceipt[];
   location?: MobileLocation;
+  paymentStatus?: string;
+  razorpayOrderId?: string;
+  razorpayPaymentId?: string;
 };
 
 export function normalizeUpiAppLabel(name: string): string {

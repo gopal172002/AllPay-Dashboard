@@ -28,6 +28,7 @@ import dayjs from "dayjs";
 import { useMemo, useState } from "react";
 import { Link as RouterLink } from "react-router-dom";
 import { useAdminData } from "../../context/AdminDataContext";
+import { isExpensePaymentVerified } from "../../types";
 
 const fmt = (value: number) => `Rs.${value.toLocaleString("en-IN")}`;
 
@@ -172,6 +173,7 @@ export const AdminTransactionsPage = () => {
                 <TableCell>Amount</TableCell>
                 <TableCell>Date / Time</TableCell>
                 <TableCell>Status</TableCell>
+                <TableCell>Payment</TableCell>
                 <TableCell>Actions</TableCell>
               </TableRow>
             </TableHead>
@@ -208,6 +210,19 @@ export const AdminTransactionsPage = () => {
                     />
                   </TableCell>
                   <TableCell>
+                    <Chip
+                      size="small"
+                      color={
+                        tx.paymentStatus === "payment_captured"
+                          ? "success"
+                          : tx.paymentStatus
+                            ? "warning"
+                            : "default"
+                      }
+                      label={tx.paymentStatus ?? "legacy"}
+                    />
+                  </TableCell>
+                  <TableCell>
                     <Stack direction="row" spacing={0.5}>
                       <Button component={RouterLink} to={`/admin/transaction/${tx.id}`} size="small">
                         View
@@ -217,6 +232,7 @@ export const AdminTransactionsPage = () => {
                           <Button
                             size="small"
                             color="success"
+                            disabled={!isExpensePaymentVerified(tx)}
                             onClick={() => approveTransaction(tx.id, Number(partialAmount[tx.id] || tx.claimedAmount))}
                           >
                             Approve
