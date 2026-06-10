@@ -118,6 +118,9 @@ export interface ITransaction extends Document {
   paymentFailedReason?: string;
   paymentConfirmedAt?: string;
   razorpayWebhookEventIds?: string[];
+  receiptFraudScore?: number;
+  receiptFraudTier?: string;
+  receiptFraudReport?: unknown;
 }
 
 const TransactionSchema = new Schema<ITransaction>({
@@ -160,6 +163,9 @@ const TransactionSchema = new Schema<ITransaction>({
   paymentFailedReason: { type: String },
   paymentConfirmedAt: { type: String },
   razorpayWebhookEventIds: { type: [String], default: [] },
+  receiptFraudScore: { type: Number },
+  receiptFraudTier: { type: String },
+  receiptFraudReport: { type: Schema.Types.Mixed },
 });
 
 export const Transaction = mongoose.model<ITransaction>('Transaction', TransactionSchema);
@@ -269,3 +275,35 @@ export const ProcessedWebhookEvent = mongoose.model<IProcessedWebhookEvent>(
   'ProcessedWebhookEvent',
   ProcessedWebhookEventSchema
 );
+
+// Payment proof (manual bank transfer / cash — employee web submissions)
+export interface IPaymentProof extends Document {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  department: string;
+  paymentType: string;
+  amount: number;
+  description: string;
+  receiptUrl?: string;
+  status: string;
+  createdAt: string;
+  /** Linked expense line after finance review (optional). */
+  transactionId?: string;
+}
+
+const PaymentProofSchema = new Schema<IPaymentProof>({
+  id: { type: String, required: true, unique: true },
+  employeeId: { type: String, required: true },
+  employeeName: { type: String, required: true },
+  department: { type: String, required: true },
+  paymentType: { type: String, required: true },
+  amount: { type: Number, required: true },
+  description: { type: String, required: true },
+  receiptUrl: { type: String },
+  status: { type: String, default: "pending" },
+  createdAt: { type: String, required: true },
+  transactionId: { type: String },
+});
+
+export const PaymentProof = mongoose.model<IPaymentProof>("PaymentProof", PaymentProofSchema);

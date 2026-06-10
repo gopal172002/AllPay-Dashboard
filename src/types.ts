@@ -29,6 +29,8 @@ export interface TransactionFlag {
   rule: string;
   reason: string;
   details: string;
+  /** Hidden from employee portal; visible in admin Fraud & Audit only */
+  adminOnly?: boolean;
 }
 
 export interface TimelineEvent {
@@ -64,12 +66,16 @@ export interface Transaction {
   razorpayOrderId?: string;
   razorpayPaymentId?: string;
   merchantVpa?: string;
+  receiptFraudScore?: number;
+  receiptFraudTier?: "safe" | "manual_review" | "high_risk";
 }
 
-export function isExpensePaymentVerified(tx: Pick<Transaction, "paymentStatus">): boolean {
-  if (!tx.paymentStatus || tx.paymentStatus === "legacy_simulated") {
-    return true;
-  }
+export function isExpensePaymentVerified(
+  tx: Pick<Transaction, "paymentStatus" | "category" | "razorpayOrderId">
+): boolean {
+  if (tx.category === "Manual proof") return true;
+  if (!tx.paymentStatus || tx.paymentStatus === "legacy_simulated") return true;
+  if (!tx.razorpayOrderId && tx.paymentStatus === "draft") return true;
   return tx.paymentStatus === "payment_captured";
 }
 
@@ -131,4 +137,26 @@ export interface ExportAudit {
   dateRange: string;
   exportedAt: string;
   recordCount: number;
+}
+
+export interface PaymentProof {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  department: string;
+  paymentType: string;
+  amount: number;
+  description: string;
+  receiptUrl?: string;
+  status: string;
+  createdAt: string;
+  transactionId?: string;
+}
+
+export interface EmployeeDashboardSummary {
+  pendingReview: number;
+  withFlags: number;
+  approvedThisMonth: number;
+  proofsAwaiting: number;
+  proofsAwaitingReview: number;
 }

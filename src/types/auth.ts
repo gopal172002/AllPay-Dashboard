@@ -1,3 +1,5 @@
+export type LoginPortal = "admin" | "employee";
+
 export interface AuthUser {
   id: string;
   email: string;
@@ -8,9 +10,16 @@ export interface AuthUser {
   companyType: string;
   jobTitle?: string;
   createdAt: string;
+  /** Active session portal chosen at login. */
+  portal?: LoginPortal;
   /** Present when this login maps to an AdminUser record. */
   adminId?: string;
   adminRole?: string;
+  /** Present when this login maps to an Employee record. */
+  employeeId?: string;
+  employeeName?: string;
+  employeeDepartment?: string;
+  employeeRole?: string;
 }
 
 export interface SignUpPayload {

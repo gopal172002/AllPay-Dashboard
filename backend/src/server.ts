@@ -1,3 +1,5 @@
+import dns from "node:dns";
+import path from "node:path";
 import express from "express";
 import mongoose from "mongoose";
 import cors from "cors";
@@ -6,7 +8,10 @@ import router from "./routes";
 import { seedDatabase } from "./seed";
 import { handleRazorpayWebhookEvent } from "./services/razorpayService";
 
-dotenv.config({ quiet: process.env.NODE_ENV === "test" });
+dotenv.config({
+  path: path.resolve(__dirname, "../.env"),
+  quiet: process.env.NODE_ENV === "test",
+});
 
 const PORT = Number(process.env.PORT) || 5000;
 const MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/allpay_db";
@@ -40,11 +45,27 @@ app.post(
   }
 );
 
-app.use(express.json());
+app.use(express.json({ limit: "15mb" }));
+
+app.use(
+  "/api/uploads/receipts",
+  express.static(path.resolve(process.cwd(), "uploads/receipts"))
+);
 
 app.use("/api", router);
 
+function configureMongoDns() {
+  const isAtlas = MONGO_URI.includes("mongodb.net");
+  if (!isAtlas) return;
+  const servers = (process.env.MONGO_DNS_SERVERS ?? "8.8.8.8,1.1.1.1")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  dns.setServers(servers);
+}
+
 export async function startServer() {
+  configureMongoDns();
   await mongoose.connect(MONGO_URI);
   console.log("Connected to MongoDB at", MONGO_URI);
   await seedDatabase();

@@ -16,6 +16,7 @@ import {
 } from "./models";
 import { uploadFile } from "./services/s3Service";
 import { requireAdminUser, requireRoles } from "./middleware/adminAuth";
+import { registerEmployeeRoutes } from "./employeeRoutes";
 import {
   getDefaultBootstrapTxLimit,
   parseTransactionQuery
@@ -64,10 +65,10 @@ const authMiddleware = (req: express.Request, res: express.Response, next: expre
   }
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    (req as express.Request & { user?: { id: string; email: string } }).user = decoded as {
-      id: string;
-      email: string;
-    };
+    (req as express.Request & { user?: Record<string, unknown> }).user = decoded as Record<
+      string,
+      unknown
+    >;
     next();
   } catch {
     return res.status(401).json({ message: "Invalid token" });
@@ -154,30 +155,72 @@ router.post("/auth/signup", async (req, res) => {
 
 router.post("/auth/login", async (req, res) => {
   try {
-    const { email, password } = req.body;
-    const normalizedEmail = email.trim().toLowerCase();
+    const { email, password, portal } = req.body as {
+      email?: string;
+      password?: string;
+      portal?: "admin" | "employee";
+    };
+    const normalizedEmail = String(email || "").trim().toLowerCase();
+    const loginPortal = portal === "employee" ? "employee" : "admin";
 
     const user = await AuthUser.findOne({ email: normalizedEmail });
     if (!user) {
       return res.status(400).json({ ok: false, message: "No account found." });
     }
 
-    const isMatch = await bcrypt.compare(password, user.passwordHash);
+    const isMatch = await bcrypt.compare(String(password || ""), user.passwordHash);
     if (!isMatch) {
       return res.status(400).json({ ok: false, message: "Incorrect password." });
     }
 
-    const token = jwt.sign({ id: user.id, email: normalizedEmail }, JWT_SECRET, { expiresIn: "7d" });
+    const adminRecord = await AdminUser.findOne({ email: normalizedEmail, active: true });
+    const employeeRecord = await Employee.findOne({ email: normalizedEmail, active: true });
+
+    if (loginPortal === "admin") {
+      if (!adminRecord) {
+        return res.status(403).json({
+          ok: false,
+          message: "This account does not have admin access. Try logging in as Employee.",
+          code: "NOT_ADMIN",
+        });
+      }
+    } else {
+      if (!employeeRecord) {
+        return res.status(403).json({
+          ok: false,
+          message: "This account is not linked to an employee profile. Ask HR to invite you.",
+          code: "NOT_EMPLOYEE",
+        });
+      }
+    }
+
+    const token = jwt.sign(
+      {
+        id: user.id,
+        email: normalizedEmail,
+        portal: loginPortal,
+        employeeId: employeeRecord?.id,
+        adminId: adminRecord?.id,
+      },
+      JWT_SECRET,
+      { expiresIn: "7d" }
+    );
 
     const userPayload = { ...user.toObject() } as Record<string, unknown>;
     delete userPayload.passwordHash;
     delete userPayload._id;
     delete userPayload.__v;
+    userPayload["portal"] = loginPortal;
 
-    const adminRecord = await AdminUser.findOne({ email: normalizedEmail, active: true });
     if (adminRecord) {
       userPayload["adminId"] = adminRecord.id;
       userPayload["adminRole"] = adminRecord.role;
+    }
+    if (employeeRecord) {
+      userPayload["employeeId"] = employeeRecord.id;
+      userPayload["employeeName"] = employeeRecord.name;
+      userPayload["employeeDepartment"] = employeeRecord.department;
+      userPayload["employeeRole"] = employeeRecord.role;
     }
 
     res.json({ ok: true, user: userPayload, token });
@@ -948,5 +991,7 @@ router.post("/admin/exports", R_EX, async (req, res) => {
     res.status(500).json({ error: (error as Error).message });
   }
 });
+
+registerEmployeeRoutes(router, authMiddleware, upload);
 
 export default router;

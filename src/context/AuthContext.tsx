@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import type { AuthUser, SignUpPayload } from "../types/auth";
+import type { AuthUser, LoginPortal, SignUpPayload } from "../types/auth";
 
 const TOKEN_KEY = "allpay_token";
 const SESSION_KEY = "allpay_session";
@@ -29,7 +29,11 @@ function writeSession(user: AuthUser | null, token?: string) {
 interface AuthContextValue {
   user: AuthUser | null;
   isReady: boolean;
-  signIn: (email: string, password: string) => Promise<{ ok: true } | { ok: false; message: string }>;
+  signIn: (
+    email: string,
+    password: string,
+    portal: LoginPortal
+  ) => Promise<{ ok: true } | { ok: false; message: string }>;
   signUp: (payload: SignUpPayload) => Promise<{ ok: true } | { ok: false; message: string }>;
   signOut: () => void;
 }
@@ -45,12 +49,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setIsReady(true);
   }, []);
 
-  const signIn = useCallback(async (email: string, password: string) => {
+  const signIn = useCallback(async (email: string, password: string, portal: LoginPortal) => {
     try {
       const res = await fetch(`${API_BASE}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, portal }),
       });
       const data = await res.json();
       if (!res.ok) return { ok: false as const, message: data.message || "Failed to login" };

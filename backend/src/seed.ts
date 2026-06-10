@@ -8,26 +8,76 @@ import {
   BillingPlan
 } from './models';
 import bcrypt from 'bcryptjs';
+import dayjs from 'dayjs';
+import {
+  DEMO_EMPLOYEE_EMAIL,
+  DEMO_EMPLOYEE_ID,
+  DEMO_EMPLOYEE_TRANSACTIONS,
+  buildDemoTransactionDoc,
+} from './demoEmployeeData';
 
-// Minimal hardcoded seed so backend is self-contained. 
-// We will generate a few realistic transactions.
+async function ensureDemoEmployeeAccount(passwordHash: string) {
+  await Employee.deleteMany({ email: DEMO_EMPLOYEE_EMAIL, id: { $ne: DEMO_EMPLOYEE_ID } });
+  await Employee.updateOne(
+    { email: DEMO_EMPLOYEE_EMAIL },
+    {
+      $set: {
+        id: DEMO_EMPLOYEE_ID,
+        name: 'Demo Employee',
+        email: DEMO_EMPLOYEE_EMAIL,
+        department: 'Operations',
+        role: 'employee',
+        active: true,
+        onboarded: true,
+        travelApproved: true,
+      },
+    },
+    { upsert: true }
+  );
+  const existingAuth = await AuthUser.findOne({ email: DEMO_EMPLOYEE_EMAIL });
+  if (!existingAuth) {
+    await AuthUser.create({
+      id: 'usr_employee_demo',
+      email: DEMO_EMPLOYEE_EMAIL,
+      fullName: 'Demo Employee',
+      companyName: 'AllPay Demo',
+      companySize: '11–50 employees',
+      monthlySpend: '₹5 lakh – ₹25 lakh',
+      companyType: 'Private Limited Company (Pvt Ltd)',
+      passwordHash,
+      createdAt: new Date().toISOString(),
+    });
+  }
+}
+
+async function seedDemoEmployeeTransactions(employeeId: string, employeeName: string, department: string) {
+  for (const tx of DEMO_EMPLOYEE_TRANSACTIONS) {
+    const doc = buildDemoTransactionDoc(tx, employeeId, employeeName, department);
+    await Transaction.updateOne({ id: doc.id }, { $set: doc }, { upsert: true });
+  }
+}
 
 export async function seedDatabase() {
+  const salt = await bcrypt.genSalt(10);
+  const passwordHash = await bcrypt.hash('password123', salt);
+
   const adminCount = await AdminUser.countDocuments();
   if (adminCount > 0) {
     await Employee.updateOne(
       { id: "EMP-1000" },
       { $set: { inviteToken: "seed-invite-emp1000" } }
     );
+    await ensureDemoEmployeeAccount(passwordHash);
+    const demo = await Employee.findOne({ email: DEMO_EMPLOYEE_EMAIL });
+    if (demo) {
+      await seedDemoEmployeeTransactions(demo.id, demo.name, demo.department);
+    }
     console.log("Database already seeded");
     return;
   }
 
   console.log('Seeding database...');
 
-  // Create one auth user for testing
-  const salt = await bcrypt.genSalt(10);
-  const passwordHash = await bcrypt.hash('password123', salt);
   await AuthUser.create({
     id: 'usr_test',
     email: 'test@example.com',
@@ -52,6 +102,18 @@ export async function seedDatabase() {
     createdAt: new Date().toISOString()
   });
 
+  await AuthUser.create({
+    id: 'usr_employee_demo',
+    email: DEMO_EMPLOYEE_EMAIL,
+    fullName: 'Demo Employee',
+    companyName: 'AllPay Demo',
+    companySize: '11–50 employees',
+    monthlySpend: '₹5 lakh – ₹25 lakh',
+    companyType: 'Private Limited Company (Pvt Ltd)',
+    passwordHash,
+    createdAt: new Date().toISOString(),
+  });
+
   const admins = [
     { id: "ADM-1", name: "Riya Nair", email: "riya@allpay.in", role: "super_admin", active: true, twoFactor: true },
     { id: "ADM-2", name: "Aman Sharma", email: "aman@allpay.in", role: "finance_manager", active: true, twoFactor: true },
@@ -72,6 +134,16 @@ export async function seedDatabase() {
     },
     { id: "EMP-1001", name: "Employee 2", email: "emp2@allpay.in", department: "Sales", role: "employee", active: true },
     { id: "EMP-1002", name: "Employee 3", email: "emp3@allpay.in", department: "HR", role: "employee", active: true },
+    {
+      id: DEMO_EMPLOYEE_ID,
+      name: "Demo Employee",
+      email: DEMO_EMPLOYEE_EMAIL,
+      department: "Operations",
+      role: "employee",
+      active: true,
+      onboarded: true,
+      travelApproved: true,
+    },
   ];
   await Employee.insertMany(employees);
 
@@ -148,6 +220,7 @@ export async function seedDatabase() {
     }
   ];
   await Transaction.insertMany(txs);
+  await seedDemoEmployeeTransactions(DEMO_EMPLOYEE_ID, "Demo Employee", "Operations");
 
   console.log('Seeding completed');
 }

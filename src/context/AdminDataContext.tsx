@@ -1,5 +1,5 @@
 import dayjs from "dayjs";
-import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { adminApi } from "../api/adminApi";
 import type { AdminUser, AlertConfig, BillingPlan, Employee, ExpensePolicy, ExportAudit, Transaction, TransactionFilters } from "../types";
 
@@ -50,6 +50,7 @@ interface AdminDataContextShape {
   toggleAdminActive: (id: string) => Promise<void>;
   recordExport: (format: "csv" | "pdf", dateRange: string, recordCount: number) => Promise<void>;
   uploadReceipt: (transactionId: string, file: File) => Promise<void>;
+  refreshTransactions: () => Promise<void>;
 }
 
 const AdminDataContext = createContext<AdminDataContextShape | undefined>(undefined);
@@ -77,9 +78,14 @@ export const AdminDataProvider = ({ children }: { children: React.ReactNode }) =
     }
   });
 
+  const refreshTransactions = useCallback(async () => {
+    const payload = await adminApi.bootstrap({ page: 1, limit: 500 });
+    setTransactions(payload.transactions);
+  }, []);
+
   useEffect(() => {
     adminApi
-      .bootstrap({ page: 1, limit: 350 })
+      .bootstrap({ page: 1, limit: 500 })
       .then((payload) => {
         setTransactions(payload.transactions);
         setEmployees(payload.employees);
@@ -147,9 +153,12 @@ export const AdminDataProvider = ({ children }: { children: React.ReactNode }) =
   };
 
   const approveTransaction = async (id: string, amount: number) => {
+    let ok = false;
     await withSaving(async () => {
       await adminApi.approveTransaction(id, amount);
+      ok = true;
     });
+    if (!ok) return;
     setTransactions((prev) =>
       prev.map((tx) =>
         tx.id === id
@@ -171,9 +180,12 @@ export const AdminDataProvider = ({ children }: { children: React.ReactNode }) =
   };
 
   const rejectTransaction = async (id: string, reason: string) => {
+    let ok = false;
     await withSaving(async () => {
       await adminApi.rejectTransaction(id, reason);
+      ok = true;
     });
+    if (!ok) return;
     setTransactions((prev) =>
       prev.map((tx) =>
         tx.id === id
@@ -380,6 +392,7 @@ export const AdminDataProvider = ({ children }: { children: React.ReactNode }) =
     toggleAdminActive,
     recordExport,
     uploadReceipt,
+    refreshTransactions,
   };
 
   return <AdminDataContext.Provider value={value}>{children}</AdminDataContext.Provider>;

@@ -78,6 +78,8 @@ npm run dev
 
 API: http://localhost:5000 (routes under `/api`).
 
+After pulling employee-dashboard changes, **restart the backend** (`Ctrl+C`, then `npm run dev` again) so new `/api/employee/*` routes and demo seed data load.
+
 **Terminal 3 — frontend:**
 
 ```bash
@@ -183,3 +185,12 @@ docker compose down
 - **Frontend:** React, TypeScript, Vite, MUI  
 - **Backend:** Express 5, Mongoose, JWT, AWS SDK S3 (LocalStack in dev), Razorpay  
 - **Tests:** Jest, supertest, mongodb-memory-server
+
+
+## admin login -
+Email - test@example.com 
+password - password123
+
+## employee login -
+Email - employee@demo.allpay.local
+password - password123

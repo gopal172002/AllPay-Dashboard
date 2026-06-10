@@ -12,6 +12,7 @@ node_modules
 .env.local
 .env.*.local
 backend/.env
+backend/uploads/
 dist
 dist-ssr
 *.local

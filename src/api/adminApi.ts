@@ -88,10 +88,11 @@ const request = async <T,>(path: string, init?: RequestInit): Promise<T> => {
     ...init,
   });
   
+  const data = (await res.json()) as T & { error?: string; message?: string };
   if (!res.ok) {
-    throw new Error(`API error: ${res.status}`);
+    throw new Error(data.error || data.message || `API error: ${res.status}`);
   }
-  return (await res.json()) as T;
+  return data as T;
 };
 
 function toQueryString(params?: Record<string, string | number | boolean | undefined>) {

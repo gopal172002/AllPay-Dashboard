@@ -46,6 +46,8 @@ export const AdminTransactionsPage = () => {
     flaggedOnly,
     setFlaggedOnly,
     dashboardLoadMs,
+    errorMessage,
+    isSaving,
   } = useAdminData();
   const [selected, setSelected] = useState<string[]>([]);
   const [rejectReason, setRejectReason] = useState("Missing supporting bill");
@@ -66,6 +68,7 @@ export const AdminTransactionsPage = () => {
 
   return (
     <Stack spacing={2.5}>
+      {errorMessage ? <Alert severity="error">{errorMessage}</Alert> : null}
       <Card sx={{ borderRadius: 3 }}>
         <CardContent>
           <Stack direction={{ xs: "column", md: "row" }} spacing={2} justifyContent="space-between">
@@ -232,7 +235,7 @@ export const AdminTransactionsPage = () => {
                           <Button
                             size="small"
                             color="success"
-                            disabled={!isExpensePaymentVerified(tx)}
+                            disabled={isSaving || !isExpensePaymentVerified(tx)}
                             onClick={() => approveTransaction(tx.id, Number(partialAmount[tx.id] || tx.claimedAmount))}
                           >
                             Approve

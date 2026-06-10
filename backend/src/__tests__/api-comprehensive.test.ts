@@ -1078,7 +1078,7 @@ describe("AllPay Comprehensive API Tests", () => {
       const res = await request(app)
         .post("/api/auth/login")
         .send({ email: "test@example.com" });
-      expect(res.status).toBe(500); // Backend doesn't validate, returns 500 on missing password
+      expect(res.status).toBe(400);
     });
 
     it("should handle invalid ID format in params", async () => {
