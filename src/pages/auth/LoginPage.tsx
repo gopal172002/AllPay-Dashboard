@@ -53,25 +53,30 @@ export function LoginPage() {
     setNeedPasswordSetup(false);
     setSetupEmail("");
     setLoading(true);
-    const result =
-      portal === "employee"
-        ? await signInEmployee(employeeId, password)
-        : await signIn(email, password, portal);
+    if (portal === "employee") {
+      const result = await signInEmployee(employeeId, password);
+      setLoading(false);
+      if (!result.ok) {
+        setError(result.message);
+        if (result.code === "NEED_PASSWORD_SETUP") {
+          setNeedPasswordSetup(true);
+          if (result.employeeEmail) setSetupEmail(result.employeeEmail);
+        }
+        return;
+      }
+      const from = state?.from;
+      navigate(from?.startsWith("/employee") ? from : "/employee", { replace: true });
+      return;
+    }
+
+    const result = await signIn(email, password, portal);
     setLoading(false);
     if (!result.ok) {
       setError(result.message);
-      if (result.code === "NEED_PASSWORD_SETUP") {
-        setNeedPasswordSetup(true);
-        if (result.employeeEmail) setSetupEmail(result.employeeEmail);
-      }
       return;
     }
     const from = state?.from;
-    if (portal === "employee") {
-      navigate(from?.startsWith("/employee") ? from : "/employee", { replace: true });
-    } else {
-      navigate(from?.startsWith("/admin") ? from : "/admin/transactions", { replace: true });
-    }
+    navigate(from?.startsWith("/admin") ? from : "/admin/transactions", { replace: true });
   };
 
   return (
