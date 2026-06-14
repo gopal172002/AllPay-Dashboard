@@ -87,11 +87,13 @@ After pulling employee-dashboard changes, **restart the backend** (`Ctrl+C`, the
 npm run dev
 ```
 
-Vite dev server: http://localhost:5173 (default). Ensure root `.env` has:
+Vite dev server: http://localhost:5173 (default). The dev server proxies `/api` to the backend — no `.env` required unless you override:
 
 ```env
-VITE_API_BASE_URL=http://localhost:5000/api
+VITE_API_BASE_URL=/api
 ```
+
+**Both** Terminal 2 (backend) and Terminal 3 (frontend) must be running for login to work.
 
 ### 4. Sign in
 
@@ -192,5 +194,7 @@ Email - test@example.com
 password - password123
 
 ## employee login -
-Email - employee@demo.allpay.local
+Employee ID - emp0
 password - password123
+
+(New employees: register at `/employee/register`, then admin assigns emp1, emp2, … before first login.)

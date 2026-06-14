@@ -1,7 +1,8 @@
 import type { Employee, EmployeeDashboardSummary, PaymentProof, Transaction } from "../types";
 import type { AggregatedAnalyticsResponse, DailySpendResponse } from "./adminApi";
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api";
+import { API_BASE } from "./config";
+import { readJsonResponse } from "./parseResponse";
 
 /** Never expose AI receipt detection wording to employees in the portal. */
 function sanitizeEmployeeFacingError(message: string): string {
@@ -21,20 +22,15 @@ const request = async <T,>(path: string, init?: RequestInit): Promise<T> => {
   }
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
-  const contentType = res.headers.get("content-type") || "";
   let data: Record<string, unknown>;
-  if (contentType.includes("application/json")) {
-    data = (await res.json()) as Record<string, unknown>;
-  } else {
-    const text = await res.text();
-    if (/entity too large|payload too large/i.test(text)) {
+  try {
+    data = await readJsonResponse(res);
+  } catch (error) {
+    const message = (error as Error).message;
+    if (/entity too large|payload too large/i.test(message)) {
       throw new Error("Image is too large. Please use a file under 10 MB.");
     }
-    throw new Error(
-      res.status === 404
-        ? "API route not found. Restart the backend (cd backend && npm run dev)."
-        : `Server returned an unexpected response (${res.status}). Restart the backend and try again.`
-    );
+    throw error;
   }
   if (!res.ok) {
     throw new Error(

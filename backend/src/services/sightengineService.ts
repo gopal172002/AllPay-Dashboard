@@ -82,7 +82,7 @@ export async function checkAiGeneratedImage(
     passed,
     aiGeneratedScore: score,
     threshold,
-    generators: data.type?.ai_generators,
+    ...(data.type?.ai_generators ? { generators: data.type.ai_generators } : {}),
     message: passed
       ? "Receipt image passed AI authenticity check."
       : `Receipt appears AI-generated (score ${(score * 100).toFixed(1)}%, limit ${(threshold * 100).toFixed(0)}%).`,

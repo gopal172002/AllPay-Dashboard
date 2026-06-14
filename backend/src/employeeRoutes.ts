@@ -1,7 +1,6 @@
-import express from "express";
+import express, { type Request, type Response } from "express";
 import dayjs from "dayjs";
 import multer from "multer";
-import { randomBytes } from "node:crypto";
 import { Transaction, PaymentProof, Employee } from "./models";
 import { requireEmployeeUser, employeeIdFromReq } from "./middleware/employeeAuth";
 import { parseTransactionQuery } from "./utils/transactionQuery";
@@ -18,6 +17,12 @@ import {
   isFlaggedForEmployee,
   sanitizeTransactionForEmployee,
 } from "./utils/employeeTransactionView";
+
+function queryString(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value) && typeof value[0] === "string") return value[0];
+  return undefined;
+}
 
 function formatTransactionDoc(doc: { toObject: () => Record<string, unknown> }) {
   const obj = doc.toObject();
@@ -82,7 +87,7 @@ export function registerEmployeeRoutes(
   const employeeRouter = express.Router();
   employeeRouter.use(authMiddleware, requireEmployeeUser);
 
-  employeeRouter.get("/bootstrap", async (req, res) => {
+  employeeRouter.get("/bootstrap", async (req: Request, res: Response) => {
     try {
       const employeeId = employeeIdFromReq(req);
       const empDoc = await Employee.findOne({ id: employeeId }).lean();
@@ -133,12 +138,11 @@ export function registerEmployeeRoutes(
     }
   });
 
-  employeeRouter.get("/spend", async (req, res) => {
+  employeeRouter.get("/spend", async (req: Request, res: Response) => {
     try {
       const employeeId = employeeIdFromReq(req);
-      const rawRange = req.query["rangeDays"];
-      const rangeStr = Array.isArray(rawRange) ? rawRange[0] : rawRange;
-      const parsed = parseInt(String(rangeStr ?? "30"), 10);
+      const rangeStr = queryString(req.query["rangeDays"]);
+      const parsed = parseInt(rangeStr ?? "30", 10);
       const rangeDays = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 365) : 30;
       const end = dayjs().endOf("day");
       const start = end.subtract(rangeDays, "day").startOf("day");
@@ -160,7 +164,7 @@ export function registerEmployeeRoutes(
     }
   });
 
-  employeeRouter.get("/transactions", async (req, res) => {
+  employeeRouter.get("/transactions", async (req: Request, res: Response) => {
     try {
       const data = await listScopedTransactions(
         employeeIdFromReq(req),
@@ -172,10 +176,13 @@ export function registerEmployeeRoutes(
     }
   });
 
-  employeeRouter.get("/transactions/:id", async (req, res) => {
+  employeeRouter.get("/transactions/:id", async (req: Request, res: Response) => {
     try {
       const rawId = req.params["id"];
       const id = Array.isArray(rawId) ? rawId[0] : rawId;
+      if (!id || typeof id !== "string") {
+        return res.status(400).json({ error: "Missing transaction id" });
+      }
       const employeeId = employeeIdFromReq(req);
       const tx = await Transaction.findOne({ id, employeeId }).exec();
       if (!tx) return res.status(404).json({ error: "Not found" });
@@ -185,15 +192,12 @@ export function registerEmployeeRoutes(
     }
   });
 
-  employeeRouter.get("/analytics/aggregated", async (req, res) => {
+  employeeRouter.get("/analytics/aggregated", async (req: Request, res: Response) => {
     try {
       const employeeId = employeeIdFromReq(req);
-      const start = req.query["startDate"];
-      const end = req.query["endDate"];
-      const b = req.query["timelineBucket"];
-      const startDate = (Array.isArray(start) ? start[0] : start) as string | undefined;
-      const endDate = (Array.isArray(end) ? end[0] : end) as string | undefined;
-      const raw = (Array.isArray(b) ? b[0] : b) as string | undefined;
+      const startDate = queryString(req.query["startDate"]);
+      const endDate = queryString(req.query["endDate"]);
+      const raw = queryString(req.query["timelineBucket"]);
       const bucket: TimelineBucket =
         raw === "weekly" || raw === "monthly" ? raw : "daily";
       const endD = endDate ? dayjs(endDate) : dayjs();
@@ -222,11 +226,10 @@ export function registerEmployeeRoutes(
     }
   });
 
-  employeeRouter.get("/analytics/daily-spend", async (req, res) => {
+  employeeRouter.get("/analytics/daily-spend", async (req: Request, res: Response) => {
     try {
       const employeeId = employeeIdFromReq(req);
-      const d = req.query["date"];
-      const dateStr = Array.isArray(d) ? d[0] : d;
+      const dateStr = queryString(req.query["date"]);
       const day = dateStr ? dayjs(dateStr, "YYYY-MM-DD", true) : dayjs();
       const ymd = day.isValid() ? day.format("YYYY-MM-DD") : dayjs().format("YYYY-MM-DD");
       const gte = dayjs(ymd, "YYYY-MM-DD").startOf("day").toISOString();
@@ -252,7 +255,7 @@ export function registerEmployeeRoutes(
     }
   });
 
-  employeeRouter.get("/payment-proofs", async (req, res) => {
+  employeeRouter.get("/payment-proofs", async (req: Request, res: Response) => {
     try {
       const proofs = await PaymentProof.find({ employeeId: employeeIdFromReq(req) })
         .sort({ createdAt: -1 })
@@ -263,7 +266,7 @@ export function registerEmployeeRoutes(
     }
   });
 
-  employeeRouter.post("/payment-proofs", upload.single("receipt"), async (req, res) => {
+  employeeRouter.post("/payment-proofs", upload.single("receipt"), async (req: Request, res: Response) => {
     try {
       const emp = req.employeeUser!;
       const body = req.body as {
@@ -309,7 +312,7 @@ export function registerEmployeeRoutes(
         paymentType,
         amount,
         description,
-        receiptUrl,
+        ...(receiptUrl ? { receiptUrl } : {}),
         status: "pending",
         createdAt: dayjs().toISOString(),
       });
@@ -336,9 +339,13 @@ export function registerEmployeeRoutes(
         hasMatchingAllpayRecord: false,
         purposeCategory: paymentType,
         paymentStatus: "legacy_simulated",
-        receiptFraudScore: fraudAnalysis?.fraudScore,
-        receiptFraudTier: fraudAnalysis?.tier,
-        receiptFraudReport: fraudAnalysis,
+        ...(fraudAnalysis
+          ? {
+              receiptFraudScore: fraudAnalysis.fraudScore,
+              receiptFraudTier: fraudAnalysis.tier,
+              receiptFraudReport: fraudAnalysis,
+            }
+          : {}),
         timeline: [
           {
             id: `${id}-submitted`,
@@ -347,7 +354,7 @@ export function registerEmployeeRoutes(
             timestamp: dayjs().toISOString(),
           },
         ],
-        receiptUrl,
+        ...(receiptUrl ? { receiptUrl } : {}),
       });
       proof.transactionId = tx.id;
       await proof.save();
@@ -364,14 +371,15 @@ export function registerEmployeeRoutes(
   employeeRouter.post(
     "/transactions/:id/receipt",
     upload.single("receipt"),
-    async (req, res) => {
+    async (req: Request, res: Response) => {
       try {
         const rawId = req.params["id"];
         const id = Array.isArray(rawId) ? rawId[0] : rawId;
         if (!id || typeof id !== "string") {
           return res.status(400).json({ error: "Missing transaction id" });
         }
-        if (!req.file) {
+        const receiptFile = req.file;
+        if (!receiptFile) {
           return res.status(400).json({ error: "No file uploaded" });
         }
         const employeeId = employeeIdFromReq(req);
@@ -380,19 +388,19 @@ export function registerEmployeeRoutes(
         let fraudAnalysis: Awaited<ReturnType<typeof analyzeReceiptFraud>> | undefined;
         try {
           fraudAnalysis = await analyzeReceiptFraud(
-            req.file.buffer,
-            req.file.mimetype,
-            req.file.originalname,
+            receiptFile.buffer,
+            receiptFile.mimetype,
+            receiptFile.originalname,
             { claimedAmount: tx.claimedAmount }
           );
         } catch (fraudErr) {
           console.error("Receipt fraud pipeline failed (receipt upload):", fraudErr);
         }
         const receiptUrl = await uploadFile(
-          req.file.buffer,
+          receiptFile.buffer,
           id,
-          req.file.mimetype,
-          req.file.originalname
+          receiptFile.mimetype,
+          receiptFile.originalname
         );
         tx.receiptUrl = receiptUrl;
         if (fraudAnalysis) {
@@ -420,7 +428,7 @@ export function registerEmployeeRoutes(
     }
   );
 
-  employeeRouter.patch("/profile", async (req, res) => {
+  employeeRouter.patch("/profile", async (req: Request, res: Response) => {
     try {
       const employeeId = employeeIdFromReq(req);
       const { name, department } = req.body as { name?: string; department?: string };

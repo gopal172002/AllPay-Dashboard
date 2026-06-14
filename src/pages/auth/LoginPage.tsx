@@ -21,21 +21,24 @@ import { useAuth } from "../../context/AuthContext";
 import type { LoginPortal } from "../../types/auth";
 
 export function LoginPage() {
-  const { signIn, user, isReady } = useAuth();
+  const { signIn, signInEmployee, user, isReady } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const state = location.state as { from?: string; portal?: LoginPortal } | null;
+  const state = location.state as { from?: string; portal?: LoginPortal; employeeId?: string } | null;
   const initialPortal: LoginPortal = state?.portal === "employee" ? "employee" : "admin";
 
   const [portal, setPortal] = useState<LoginPortal>(initialPortal);
   const [email, setEmail] = useState("");
+  const [employeeId, setEmployeeId] = useState(state?.employeeId ?? "");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [needPasswordSetup, setNeedPasswordSetup] = useState(false);
+  const [setupEmail, setSetupEmail] = useState("");
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (!isReady || !user) return;
-    if (user.portal === "employee" || user.employeeId && !user.adminId) {
+    if (user.portal === "employee" || (user.employeeId && !user.adminId)) {
       navigate("/employee", { replace: true });
       return;
     }
@@ -47,11 +50,20 @@ export function LoginPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    setNeedPasswordSetup(false);
+    setSetupEmail("");
     setLoading(true);
-    const result = await signIn(email, password, portal);
+    const result =
+      portal === "employee"
+        ? await signInEmployee(employeeId, password)
+        : await signIn(email, password, portal);
     setLoading(false);
     if (!result.ok) {
       setError(result.message);
+      if (result.code === "NEED_PASSWORD_SETUP") {
+        setNeedPasswordSetup(true);
+        if (result.employeeEmail) setSetupEmail(result.employeeEmail);
+      }
       return;
     }
     const from = state?.from;
@@ -90,26 +102,57 @@ export function LoginPage() {
             </Typography>
           ) : (
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              View your spend, submit payment proofs, and track flags. You cannot approve expenses here.
+              Log in with the Employee ID your admin assigned (e.g. emp1). If you do not have one yet, register first
+              and wait for your admin.
             </Typography>
           )}
 
           {error ? (
-            <Alert severity="error" sx={{ mb: 2 }}>
+            <Alert severity={needPasswordSetup ? "warning" : "error"} sx={{ mb: 2 }}>
               {error}
+              {needPasswordSetup ? (
+                <Box sx={{ mt: 1.5 }}>
+                  <Button
+                    component={RouterLink}
+                    to="/employee/register"
+                    state={{
+                      complete: true,
+                      employeeId: employeeId.trim(),
+                      email: setupEmail || undefined,
+                    }}
+                    variant="outlined"
+                    size="small"
+                    sx={{ textTransform: "none" }}
+                  >
+                    Set password now
+                  </Button>
+                </Box>
+              ) : null}
             </Alert>
           ) : null}
           <Box component="form" onSubmit={handleSubmit}>
             <Stack spacing={2}>
-              <TextField
-                label="Work email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                fullWidth
-                autoComplete="email"
-              />
+              {portal === "admin" ? (
+                <TextField
+                  label="Work email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  fullWidth
+                  autoComplete="email"
+                />
+              ) : (
+                <TextField
+                  label="Employee ID"
+                  placeholder="e.g. emp1"
+                  value={employeeId}
+                  onChange={(e) => setEmployeeId(e.target.value)}
+                  required
+                  fullWidth
+                  autoComplete="username"
+                />
+              )}
               <TextField
                 label="Password"
                 type="password"
@@ -131,20 +174,35 @@ export function LoginPage() {
             </Stack>
           </Box>
           {portal === "employee" ? (
-            <Typography variant="caption" display="block" color="text.secondary" sx={{ mt: 2 }}>
-              Demo: employee@demo.allpay.local / password123
-            </Typography>
+            <>
+              <Typography variant="caption" display="block" color="text.secondary" sx={{ mt: 2 }}>
+                Demo: emp0 / password123
+              </Typography>
+              <Typography sx={{ mt: 2 }} color="text.secondary">
+                New employee?{" "}
+                <Link component={RouterLink} to="/employee/register" fontWeight={700}>
+                  Register
+                </Link>
+                {" · "}
+                Have an ID but no password?{" "}
+                <Link component={RouterLink} to="/employee/register" state={{ complete: true }} fontWeight={700}>
+                  Complete setup
+                </Link>
+              </Typography>
+            </>
           ) : (
-            <Typography variant="caption" display="block" color="text.secondary" sx={{ mt: 2 }}>
-              Demo admin: test@example.com / password123
-            </Typography>
+            <>
+              <Typography variant="caption" display="block" color="text.secondary" sx={{ mt: 2 }}>
+                Demo admin: test@example.com / password123
+              </Typography>
+              <Typography sx={{ mt: 3 }} color="text.secondary">
+                New to allpay?{" "}
+                <Link component={RouterLink} to="/signup" fontWeight={700}>
+                  Sign up your company
+                </Link>
+              </Typography>
+            </>
           )}
-          <Typography sx={{ mt: 3 }} color="text.secondary">
-            New to allpay?{" "}
-            <Link component={RouterLink} to="/signup" fontWeight={700}>
-              Sign up your company
-            </Link>
-          </Typography>
         </Paper>
       </Container>
     </Box>

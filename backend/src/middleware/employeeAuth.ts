@@ -1,24 +1,6 @@
 import express from "express";
 import { Employee } from "../models";
-
-export type EmployeePayload = {
-  id: string;
-  name: string;
-  email: string;
-  department: string;
-  role: string;
-  active: boolean;
-  onboarded: boolean;
-  travelApproved: boolean;
-};
-
-declare global {
-  namespace Express {
-    interface Request {
-      employeeUser?: EmployeePayload;
-    }
-  }
-}
+export type { EmployeePayload } from "../types/employeeRequest";
 
 /** After JWT: resolve active Employee by auth email, or 403. */
 export async function requireEmployeeUser(
@@ -39,7 +21,7 @@ export async function requireEmployeeUser(
   if (!emp) {
     return res.status(403).json({
       error:
-        "Employee access required. Log in on the Employee tab with employee@demo.allpay.local (not the admin account).",
+        "Employee access required. Log in on the Employee tab with your Employee ID (e.g. emp0 for demo).",
       code: "NOT_EMPLOYEE",
     });
   }

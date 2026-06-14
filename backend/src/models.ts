@@ -60,8 +60,13 @@ export interface IEmployee extends Document {
   active: boolean;
   onboarded: boolean;
   travelApproved: boolean;
-  /** Present after invite; used for link-based onboarding (email later). */
+  /** True once admin assigns a serial ID (emp1, emp2, …). */
+  idAssigned: boolean;
+  /** Secure token for legacy mobile pairing (employeeId + inviteToken). */
   inviteToken?: string;
+  /** Short code admin shares for mobile app onboarding (e.g. ALLPAY7K3M2N). */
+  inviteCode?: string;
+  phone?: string;
 }
 
 const EmployeeSchema = new Schema<IEmployee>({
@@ -73,10 +78,48 @@ const EmployeeSchema = new Schema<IEmployee>({
   active: { type: Boolean, default: true },
   onboarded: { type: Boolean, default: false },
   travelApproved: { type: Boolean, default: false },
+  idAssigned: { type: Boolean, default: false },
   inviteToken: { type: String, sparse: true, select: true },
+  inviteCode: { type: String, sparse: true, unique: true, uppercase: true, trim: true },
+  phone: { type: String },
 });
 
 export const Employee = mongoose.model<IEmployee>('Employee', EmployeeSchema);
+
+export type MobileOnboardingStep = "profile" | "otp" | "complete";
+
+export interface IMobileOnboardingSession extends Document {
+  id: string;
+  inviteCode: string;
+  employeeId: string;
+  step: MobileOnboardingStep;
+  phone?: string;
+  otpHash?: string;
+  otpExpiresAt?: string;
+  otpVerified: boolean;
+  completed: boolean;
+  expiresAt: string;
+  createdAt: string;
+}
+
+const MobileOnboardingSessionSchema = new Schema<IMobileOnboardingSession>({
+  id: { type: String, required: true, unique: true },
+  inviteCode: { type: String, required: true },
+  employeeId: { type: String, required: true },
+  step: { type: String, required: true },
+  phone: { type: String },
+  otpHash: { type: String },
+  otpExpiresAt: { type: String },
+  otpVerified: { type: Boolean, default: false },
+  completed: { type: Boolean, default: false },
+  expiresAt: { type: String, required: true },
+  createdAt: { type: String, required: true },
+});
+
+export const MobileOnboardingSession = mongoose.model<IMobileOnboardingSession>(
+  "MobileOnboardingSession",
+  MobileOnboardingSessionSchema
+);
 
 // Transaction
 export interface ITransaction extends Document {

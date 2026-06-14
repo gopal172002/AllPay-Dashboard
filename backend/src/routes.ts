@@ -17,6 +17,7 @@ import {
 import { uploadFile } from "./services/s3Service";
 import { requireAdminUser, requireRoles } from "./middleware/adminAuth";
 import { registerEmployeeRoutes } from "./employeeRoutes";
+import { registerMobileOnboardingRoutes } from "./mobileOnboardingRoutes";
 import {
   getDefaultBootstrapTxLimit,
   parseTransactionQuery
@@ -39,12 +40,31 @@ import {
 import {
   confirmRazorpayPayment,
   createRazorpayOrder,
-  handleRazorpayWebhookEvent,
   markCheckoutOpened
 } from "./services/razorpayService";
 import { type PaymentStatus } from "./services/razorpayConfig";
+import {
+  employeeIdIsAssigned,
+  findActiveEmployeeByEmail,
+  findEmployeeByLoginId,
+  getNextEmployeeSerialId,
+  isSerialEmployeeId,
+  makePendingEmployeeId,
+  normalizeSerialEmployeeId,
+} from "./utils/employeeSerialId";
+import {
+  ensureEmployeeInviteCode,
+  generateUniqueInviteCode,
+} from "./utils/inviteCode";
 
 const router = express.Router();
+
+function formatEmployeeDoc(emp: { toObject: () => Record<string, unknown> }) {
+  const o = emp.toObject() as Record<string, unknown>;
+  delete o._id;
+  delete o.__v;
+  return o;
+}
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 }
@@ -153,19 +173,196 @@ router.post("/auth/signup", async (req, res) => {
   }
 });
 
-router.post("/auth/login", async (req, res) => {
+router.post("/auth/employee/register", async (req, res) => {
   try {
-    const { email, password, portal } = req.body as {
+    const { email, password, fullName, department, name, employeeId: employeeIdIn } = req.body as {
       email?: string;
       password?: string;
-      portal?: "admin" | "employee";
+      fullName?: string;
+      department?: string;
+      name?: string;
+      employeeId?: string;
     };
     const normalizedEmail = String(email || "").trim().toLowerCase();
+    const displayName = String(fullName || name || "").trim();
+    const rawEmployeeId = String(employeeIdIn || "").trim();
+
+    if (!normalizedEmail) {
+      return res.status(400).json({ ok: false, message: "Work email is required." });
+    }
+    if (!password || String(password).length < 8) {
+      return res.status(400).json({ ok: false, message: "Password must be at least 8 characters." });
+    }
+
+    const existingAuth = await AuthUser.findOne({ email: normalizedEmail });
+    if (existingAuth) {
+      const linkedEmp = await Employee.findOne({ email: normalizedEmail, active: true }).exec();
+      if (linkedEmp && employeeIdIsAssigned(linkedEmp)) {
+        const idHint = rawEmployeeId && normalizeSerialEmployeeId(rawEmployeeId) !== linkedEmp.id
+          ? ` Your assigned ID is ${linkedEmp.id}.`
+          : "";
+        return res.status(400).json({
+          ok: false,
+          code: "ALREADY_REGISTERED",
+          employeeId: linkedEmp.id,
+          message: `You already completed registration.${idHint} Log in with Employee ID ${linkedEmp.id} and the password you set earlier (not a new password here).`,
+        });
+      }
+      return res.status(400).json({
+        ok: false,
+        code: "ALREADY_REGISTERED_PENDING",
+        message:
+          "You already registered with this email. Wait for your admin to assign an Employee ID, then log in with that ID and your original password.",
+      });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const passwordHash = await bcrypt.hash(String(password), salt);
+    const createdAt = new Date().toISOString();
+
+    /** Admin assigned emp1 — employee completes registration with ID + email + password. */
+    if (rawEmployeeId) {
+      const emp = await findEmployeeByLoginId(rawEmployeeId);
+      if (!emp || !employeeIdIsAssigned(emp)) {
+        return res.status(400).json({
+          ok: false,
+          message: "Invalid Employee ID, or your admin has not assigned one yet.",
+        });
+      }
+      if (emp.email !== normalizedEmail) {
+        return res.status(400).json({
+          ok: false,
+          message: "This email does not match the Employee ID. Use the email your admin has on file.",
+        });
+      }
+      const nameForAccount = displayName || emp.name;
+      await AuthUser.create({
+        id: `usr_${Date.now().toString(36)}`,
+        email: normalizedEmail,
+        fullName: nameForAccount,
+        companyName: "—",
+        companySize: "—",
+        monthlySpend: "—",
+        companyType: "—",
+        passwordHash,
+        createdAt,
+      });
+      if (displayName && displayName !== emp.name) {
+        emp.name = displayName;
+        await emp.save();
+      }
+      return res.json({
+        ok: true,
+        ready: true,
+        employeeId: emp.id,
+        message: `Account ready. Log in with Employee ID ${emp.id} and your password.`,
+      });
+    }
+
+    if (!displayName) {
+      return res.status(400).json({ ok: false, message: "Full name is required." });
+    }
+
+    let employeeRecord = await Employee.findOne({ email: normalizedEmail, active: true });
+    if (employeeRecord && employeeIdIsAssigned(employeeRecord)) {
+      return res.status(400).json({
+        ok: false,
+        code: "COMPLETE_REGISTRATION",
+        employeeId: employeeRecord.id,
+        message: `You already have Employee ID ${employeeRecord.id}. Complete registration using your ID and set a password below.`,
+      });
+    }
+
+    await AuthUser.create({
+      id: `usr_${Date.now().toString(36)}`,
+      email: normalizedEmail,
+      fullName: displayName,
+      companyName: "—",
+      companySize: "—",
+      monthlySpend: "—",
+      companyType: "—",
+      passwordHash,
+      createdAt,
+    });
+
+    if (!employeeRecord) {
+      employeeRecord = await Employee.create({
+        id: makePendingEmployeeId(),
+        name: displayName,
+        email: normalizedEmail,
+        department: String(department || "").trim() || "Unassigned",
+        role: "employee",
+        active: true,
+        onboarded: false,
+        idAssigned: false,
+        travelApproved: false,
+      });
+    } else {
+      employeeRecord.name = displayName;
+      if (department?.trim()) employeeRecord.department = department.trim();
+      await employeeRecord.save();
+    }
+
+    res.json({
+      ok: true,
+      pending: true,
+      message:
+        "Your admin will assign your Employee ID. You can log in once you receive it (e.g. emp1).",
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, message: (error as Error).message });
+  }
+});
+
+router.post("/auth/login", async (req, res) => {
+  try {
+    const { email, password, employeeId, portal } = req.body as {
+      email?: string;
+      password?: string;
+      employeeId?: string;
+      portal?: "admin" | "employee";
+    };
     const loginPortal = portal === "employee" ? "employee" : "admin";
 
-    const user = await AuthUser.findOne({ email: normalizedEmail });
-    if (!user) {
-      return res.status(400).json({ ok: false, message: "No account found." });
+    let normalizedEmail = String(email || "").trim().toLowerCase();
+    let employeeRecord: InstanceType<typeof Employee> | null = null;
+    let user: InstanceType<typeof AuthUser> | null = null;
+
+     if (loginPortal === "employee") {
+      const rawId = String(employeeId || "").trim();
+      if (!rawId) {
+        return res.status(400).json({ ok: false, message: "Employee ID is required (e.g. emp1)." });
+      }
+      employeeRecord = await findEmployeeByLoginId(rawId);
+      if (!employeeRecord) {
+        return res.status(400).json({ ok: false, message: "No employee found with that ID." });
+      }
+      if (!employeeIdIsAssigned(employeeRecord)) {
+        return res.status(403).json({
+          ok: false,
+          message: "Your Employee ID has not been assigned yet. Ask your admin to assign one.",
+          code: "PENDING_ID",
+        });
+      }
+      normalizedEmail = employeeRecord.email;
+      user = await AuthUser.findOne({ email: normalizedEmail });
+      if (!user) {
+        return res.status(400).json({
+          ok: false,
+          code: "NEED_PASSWORD_SETUP",
+          employeeId: employeeRecord.id,
+          employeeEmail: employeeRecord.email,
+          message: `No password set yet for ${employeeRecord.id}. Go to Employee registration → "I have my Employee ID", enter ${employeeRecord.id}, your work email (${employeeRecord.email}), and choose a password.`,
+        });
+      }
+    } else {
+      if (!normalizedEmail) {
+        return res.status(400).json({ ok: false, message: "Email is required." });
+      }
+      user = await AuthUser.findOne({ email: normalizedEmail });
+      if (!user) {
+        return res.status(400).json({ ok: false, message: "No account found." });
+      }
     }
 
     const isMatch = await bcrypt.compare(String(password || ""), user.passwordHash);
@@ -174,7 +371,9 @@ router.post("/auth/login", async (req, res) => {
     }
 
     const adminRecord = await AdminUser.findOne({ email: normalizedEmail, active: true });
-    const employeeRecord = await Employee.findOne({ email: normalizedEmail, active: true });
+    if (!employeeRecord) {
+      employeeRecord = await Employee.findOne({ email: normalizedEmail, active: true });
+    }
 
     if (loginPortal === "admin") {
       if (!adminRecord) {
@@ -184,14 +383,12 @@ router.post("/auth/login", async (req, res) => {
           code: "NOT_ADMIN",
         });
       }
-    } else {
-      if (!employeeRecord) {
-        return res.status(403).json({
-          ok: false,
-          message: "This account is not linked to an employee profile. Ask HR to invite you.",
-          code: "NOT_EMPLOYEE",
-        });
-      }
+    } else if (!employeeRecord) {
+      return res.status(403).json({
+        ok: false,
+        message: "This account is not linked to an employee profile. Ask HR to invite you.",
+        code: "NOT_EMPLOYEE",
+      });
     }
 
     const token = jwt.sign(
@@ -229,7 +426,9 @@ router.post("/auth/login", async (req, res) => {
   }
 });
 
-// --- MOBILE (AllpayEmployeeApp) — sync secret or employee JWT ---
+// --- MOBILE (AllpayEmployeeApp) — onboarding + sync ---
+registerMobileOnboardingRoutes(router);
+
 router.post("/mobile/auth/employee-token", async (req, res) => {
   try {
     const { employeeId, inviteToken } = req.body as {
@@ -310,10 +509,10 @@ router.post("/mobile/payments/create-order", mobileDeviceAuth, async (req: Mobil
       return res.status(400).json({ ok: false, message: "Valid amount is required" });
     }
 
-    const resolved = await resolveEmployeeForMobileSync(employeeId, {
-      employeeName: body.employeeName,
-      department: body.department
-    });
+    const syncOverrides: { employeeName?: string; department?: string } = {};
+    if (body.employeeName?.trim()) syncOverrides.employeeName = body.employeeName.trim();
+    if (body.department?.trim()) syncOverrides.department = body.department.trim();
+    const resolved = await resolveEmployeeForMobileSync(employeeId, syncOverrides);
     if (!resolved) {
       return res.status(404).json({ ok: false, message: "Employee not found" });
     }
@@ -329,9 +528,9 @@ router.post("/mobile/payments/create-order", mobileDeviceAuth, async (req: Mobil
         name: body.merchant.name ?? "Unknown",
         category: body.merchant.category ?? "office",
         mcc: body.merchant.mcc ?? "5999",
-        amount: body.merchant.amount
+        ...(body.merchant.amount != null ? { amount: body.merchant.amount } : {}),
       },
-      upiApp: body.upiApp
+      ...(body.upiApp?.trim() ? { upiApp: body.upiApp.trim() } : {}),
     });
 
     res.json({ ok: true, ...result });
@@ -854,12 +1053,14 @@ router.post("/admin/employees/import", R_HR, async (req, res) => {
       errors.push(`Row ${r + 1}: missing email`);
       continue;
     }
-    const id = I.id >= 0 && cells[I.id!] ? cells[I.id!]! : `EMP-I-${Date.now()}-${r}`;
+    const hasExplicitId = I.id >= 0 && Boolean(cells[I.id!]);
+    const id = hasExplicitId ? cells[I.id!]! : makePendingEmployeeId();
     const name = I.name >= 0 && cells[I.name!] ? cells[I.name!]! : email.split("@")[0]! || "User";
     const department =
       I.department >= 0 && cells[I.department!] ? cells[I.department!]! : "Unassigned";
     const roleRec =
       I.role >= 0 && cells[I.role!] ? (cells[I.role!]! === "manager" ? "manager" : "employee") : "employee";
+    const idAssigned = hasExplicitId;
     const dupe = await Employee.findOne({ email: email.toLowerCase() });
     if (dupe) {
       skipped += 1;
@@ -867,15 +1068,17 @@ router.post("/admin/employees/import", R_HR, async (req, res) => {
     }
     try {
       const emp = await Employee.create({
-        id,
+        id: idAssigned && isSerialEmployeeId(id) ? normalizeSerialEmployeeId(id) : id,
         name,
         email: email.toLowerCase(),
         department,
         role: roleRec,
         active: true,
-        onboarded: false,
+        onboarded: idAssigned,
+        idAssigned,
         travelApproved: false
       });
+      await ensureEmployeeInviteCode(emp);
       const o = emp.toObject() as unknown as Record<string, unknown>;
       delete o._id;
       delete o.__v;
@@ -900,25 +1103,133 @@ router.post("/admin/employees/invite", R_HR, async (req, res) => {
   if (await Employee.findOne({ email: em })) {
     return res.status(400).json({ error: "Employee with this email already exists" });
   }
-  const id = `EMP-INV-${Date.now().toString(36)}`;
   const name = (nameIn && String(nameIn).trim()) || em.split("@")[0] || "User";
   const departmentVal = (department && String(department).trim()) || "Unassigned";
   const inviteToken = randomBytes(24).toString("hex");
+  const inviteCode = await generateUniqueInviteCode();
   const emp = await Employee.create({
-    id,
+    id: makePendingEmployeeId(),
     name,
     email: em,
     department: departmentVal,
     role: "employee",
     active: true,
     onboarded: false,
+    idAssigned: false,
     travelApproved: false,
-    inviteToken
+    inviteToken,
+    inviteCode,
   });
-  const o = emp.toObject() as unknown as Record<string, unknown>;
-  delete o._id;
-  delete o.__v;
-  res.json({ ok: true, employee: o });
+  res.json({
+    ok: true,
+    employee: formatEmployeeDoc(emp),
+    inviteCode,
+    message: `Employee invited. Share invite code ${inviteCode} for the mobile app.`,
+  });
+});
+
+router.get("/admin/employees/pending-id", R_HR, async (_req, res) => {
+  try {
+    const rows = await Employee.find({ active: true, idAssigned: false }).sort({ name: 1 }).exec();
+    res.json({ ok: true, employees: rows.map((emp) => formatEmployeeDoc(emp)) });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+router.post("/admin/employees/assign-id", R_HR, async (req, res) => {
+  try {
+    const { email } = req.body as { email?: string };
+    const em = String(email || "").trim().toLowerCase();
+    if (!em) {
+      return res.status(400).json({ error: "email is required" });
+    }
+    const emp = await Employee.findOne({ email: em, active: true });
+    if (!emp) {
+      return res.status(404).json({ error: "Employee not found" });
+    }
+    if (employeeIdIsAssigned(emp)) {
+      return res.status(400).json({ error: "Employee already has an assigned ID", employeeId: emp.id });
+    }
+
+    const newId = await getNextEmployeeSerialId();
+    emp.id = newId;
+    emp.idAssigned = true;
+    emp.onboarded = true;
+    if (!emp.inviteToken) {
+      emp.inviteToken = randomBytes(24).toString("hex");
+    }
+    const inviteCode = await ensureEmployeeInviteCode(emp);
+    await emp.save();
+
+    res.json({
+      ok: true,
+      employeeId: newId,
+      inviteCode,
+      message: `Assigned ${newId}. Share invite code ${inviteCode} for the mobile app, or use web registration with Employee ID ${newId}.`,
+      employee: formatEmployeeDoc(emp),
+    });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+router.post("/admin/employees/reset-login", R_HR, async (req, res) => {
+  try {
+    const { email, employeeId } = req.body as { email?: string; employeeId?: string };
+    let emp = null;
+    if (employeeId?.trim()) {
+      emp = await findEmployeeByLoginId(employeeId);
+    }
+    if (!emp && email?.trim()) {
+      emp = await findActiveEmployeeByEmail(email);
+    }
+    if (!emp) {
+      return res.status(400).json({ error: "email or employeeId is required" });
+    }
+    if (!employeeIdIsAssigned(emp)) {
+      return res.status(400).json({ error: "Assign an Employee ID before resetting login" });
+    }
+    const authEmail = String(emp.email).trim().toLowerCase();
+    const deleted = await AuthUser.deleteOne({ email: authEmail });
+    res.json({
+      ok: true,
+      employeeId: emp.id,
+      hadLogin: deleted.deletedCount > 0,
+      message: deleted.deletedCount
+        ? `Login cleared for ${emp.id}. Employee can set a new password under Register → "I have my Employee ID".`
+        : `No login existed for ${emp.id}. Employee should use Register → "I have my Employee ID" to set a password.`,
+    });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+router.post("/admin/employees/generate-invite-code", R_HR, async (req, res) => {
+  try {
+    const { email } = req.body as { email?: string };
+    const em = String(email || "").trim().toLowerCase();
+    if (!em) {
+      return res.status(400).json({ error: "email is required" });
+    }
+    const emp = await Employee.findOne({ email: em, active: true });
+    if (!emp) {
+      return res.status(404).json({ error: "Employee not found" });
+    }
+    emp.inviteCode = await generateUniqueInviteCode();
+    if (!emp.inviteToken) {
+      emp.inviteToken = randomBytes(24).toString("hex");
+    }
+    await emp.save();
+    res.json({
+      ok: true,
+      inviteCode: emp.inviteCode,
+      employee: formatEmployeeDoc(emp),
+      message: `Invite code ${emp.inviteCode} ready for the mobile app.`,
+    });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
 });
 
 router.patch("/admin/alerts", R_FIN, async (req, res) => {

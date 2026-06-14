@@ -8,7 +8,6 @@ import {
   BillingPlan
 } from './models';
 import bcrypt from 'bcryptjs';
-import dayjs from 'dayjs';
 import {
   DEMO_EMPLOYEE_EMAIL,
   DEMO_EMPLOYEE_ID,
@@ -29,6 +28,7 @@ async function ensureDemoEmployeeAccount(passwordHash: string) {
         role: 'employee',
         active: true,
         onboarded: true,
+        idAssigned: true,
         travelApproved: true,
       },
     },
@@ -63,9 +63,13 @@ export async function seedDatabase() {
 
   const adminCount = await AdminUser.countDocuments();
   if (adminCount > 0) {
+    await Employee.updateMany(
+      { id: { $not: /^PEND-/ } },
+      { $set: { idAssigned: true } }
+    );
     await Employee.updateOne(
       { id: "EMP-1000" },
-      { $set: { inviteToken: "seed-invite-emp1000" } }
+      { $set: { inviteToken: "seed-invite-emp1000", inviteCode: "ALLPAY123" } }
     );
     await ensureDemoEmployeeAccount(passwordHash);
     const demo = await Employee.findOne({ email: DEMO_EMPLOYEE_EMAIL });
@@ -130,10 +134,28 @@ export async function seedDatabase() {
       department: "Engineering",
       role: "manager",
       active: true,
-      inviteToken: "seed-invite-emp1000"
+      idAssigned: true,
+      inviteToken: "seed-invite-emp1000",
+      inviteCode: "ALLPAY123",
     },
-    { id: "EMP-1001", name: "Employee 2", email: "emp2@allpay.in", department: "Sales", role: "employee", active: true },
-    { id: "EMP-1002", name: "Employee 3", email: "emp3@allpay.in", department: "HR", role: "employee", active: true },
+    {
+      id: "EMP-1001",
+      name: "Employee 2",
+      email: "emp2@allpay.in",
+      department: "Sales",
+      role: "employee",
+      active: true,
+      idAssigned: true
+    },
+    {
+      id: "EMP-1002",
+      name: "Employee 3",
+      email: "emp3@allpay.in",
+      department: "HR",
+      role: "employee",
+      active: true,
+      idAssigned: true
+    },
     {
       id: DEMO_EMPLOYEE_ID,
       name: "Demo Employee",
@@ -142,6 +164,7 @@ export async function seedDatabase() {
       role: "employee",
       active: true,
       onboarded: true,
+      idAssigned: true,
       travelApproved: true,
     },
   ];

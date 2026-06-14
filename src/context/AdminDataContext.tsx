@@ -42,7 +42,10 @@ interface AdminDataContextShape {
   createPolicy: (policy: ExpensePolicy) => Promise<{ matchedCount: number }>;
   previewPolicy: (policy: ExpensePolicy) => Transaction[];
   addEmployeesFromCsv: (text: string) => Promise<number>;
-  inviteEmployee: (email: string, department: string) => Promise<void>;
+  inviteEmployee: (email: string, department: string) => Promise<string | undefined>;
+  assignEmployeeId: (email: string) => Promise<{ employeeId: string; inviteCode?: string }>;
+  generateEmployeeInviteCode: (email: string) => Promise<{ ok: boolean; inviteCode?: string; message: string }>;
+  resetEmployeeLogin: (email: string, employeeId?: string) => Promise<{ ok: boolean; message: string }>;
   manageDepartment: (mode: "create" | "rename" | "delete", value: string, next?: string) => void;
   updateAlertConfig: (next: Partial<AlertConfig>) => Promise<void>;
   updateBillingPlan: (plan: BillingPlan["plan"]) => Promise<void>;
@@ -276,6 +279,7 @@ export const AdminDataProvider = ({ children }: { children: React.ReactNode }) =
         active: e.active !== false,
         onboarded: e.onboarded ?? false,
         travelApproved: e.travelApproved ?? false,
+        idAssigned: e.idAssigned ?? true,
       }));
       if (added.length) {
         setEmployees((prev) => [...added, ...prev]);
@@ -286,11 +290,73 @@ export const AdminDataProvider = ({ children }: { children: React.ReactNode }) =
   };
 
   const inviteEmployee = async (email: string, department: string) => {
+    let inviteCode: string | undefined;
     await withSaving(async () => {
-      const { employee } = await adminApi.inviteEmployee(email, department);
-      setEmployees((prev) => [employee, ...prev]);
+      const result = await adminApi.inviteEmployee(email, department);
+      inviteCode = result.inviteCode;
+      setEmployees((prev) => [{ ...result.employee, inviteCode: result.inviteCode }, ...prev]);
       setBilling((prev) => ({ ...prev, headcount: prev.headcount + 1 }));
     });
+    return inviteCode;
+  };
+
+  const assignEmployeeId = async (email: string) => {
+    let employeeId = "";
+    let inviteCode: string | undefined;
+    await withSaving(async () => {
+      const result = await adminApi.assignEmployeeId(email);
+      employeeId = result.employeeId;
+      inviteCode = result.inviteCode;
+      setEmployees((prev) =>
+        prev.map((emp) =>
+          emp.email === email
+            ? {
+                ...emp,
+                id: result.employeeId,
+                idAssigned: true,
+                onboarded: true,
+                inviteCode: result.inviteCode,
+              }
+            : emp
+        )
+      );
+    });
+    return { employeeId, inviteCode };
+  };
+
+  const generateEmployeeInviteCode = async (email: string) => {
+    setErrorMessage("");
+    setIsSaving(true);
+    try {
+      const result = await adminApi.generateEmployeeInviteCode(email);
+      setEmployees((prev) =>
+        prev.map((emp) =>
+          emp.email === email ? { ...emp, inviteCode: result.inviteCode } : emp
+        )
+      );
+      return { ok: true, inviteCode: result.inviteCode, message: result.message };
+    } catch (error) {
+      const message = (error as Error).message;
+      setErrorMessage(message);
+      return { ok: false, message };
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const resetEmployeeLogin = async (email: string, employeeId?: string) => {
+    setErrorMessage("");
+    setIsSaving(true);
+    try {
+      const result = await adminApi.resetEmployeeLogin(email, employeeId);
+      return { ok: true, message: result.message };
+    } catch (error) {
+      const message = (error as Error).message;
+      setErrorMessage(message);
+      return { ok: false, message };
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const manageDepartment = (mode: "create" | "rename" | "delete", value: string, next?: string) => {
@@ -385,6 +451,9 @@ export const AdminDataProvider = ({ children }: { children: React.ReactNode }) =
     previewPolicy,
     addEmployeesFromCsv,
     inviteEmployee,
+    assignEmployeeId,
+    generateEmployeeInviteCode,
+    resetEmployeeLogin,
     manageDepartment,
     updateAlertConfig,
     updateBillingPlan,

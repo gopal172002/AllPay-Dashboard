@@ -33,6 +33,15 @@ export interface SignUpPayload {
   jobTitle?: string;
 }
 
+export interface EmployeeRegisterPayload {
+  email: string;
+  fullName?: string;
+  password: string;
+  department?: string;
+  /** Set when admin already assigned emp1, emp2, … */
+  employeeId?: string;
+}
+
 export const COMPANY_TYPES = [
   "Private Limited Company (Pvt Ltd)",
   "Public Limited Company (Ltd)",

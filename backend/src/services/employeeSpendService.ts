@@ -45,7 +45,7 @@ export function computeEmployeeSpend(
     totals.set(cat, (totals.get(cat) || 0) + amt);
   }
 
-  const byCategory = SPEND_CATEGORY_ORDER.map((category) => ({
+  const byCategory: { category: string; total: number }[] = SPEND_CATEGORY_ORDER.map((category) => ({
     category,
     total: Math.round((totals.get(category) || 0) * 100) / 100,
   }));

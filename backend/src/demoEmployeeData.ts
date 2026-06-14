@@ -1,7 +1,7 @@
 import dayjs from "dayjs";
 
 export const DEMO_EMPLOYEE_EMAIL = "employee@demo.allpay.local";
-export const DEMO_EMPLOYEE_ID = "EMP-DEMO";
+export const DEMO_EMPLOYEE_ID = "emp0";
 
 type DemoTx = {
   id: string;

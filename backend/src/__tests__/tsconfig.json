@@ -1,13 +1,4 @@
 {
-  "compilerOptions": {
-    "module": "commonjs",
-    "moduleResolution": "node",
-    "target": "esnext",
-    "strict": true,
-    "skipLibCheck": true,
-    "esModuleInterop": true,
-    "types": ["node", "jest"],
-    "noEmit": true
-  },
+  "extends": "../../tsconfig.jest.json",
   "include": ["./**/*.ts", "../**/*.ts"]
 }

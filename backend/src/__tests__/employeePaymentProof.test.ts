@@ -42,7 +42,7 @@ describe("employee payment proof fraud pipeline", () => {
     const employeeLogin = await request(app)
       .post("/api/auth/login")
       .send({
-        email: "employee@demo.allpay.local",
+        employeeId: "emp0",
         password: "password123",
         portal: "employee",
       });

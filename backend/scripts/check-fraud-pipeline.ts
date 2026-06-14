@@ -2,23 +2,32 @@
  * Live smoke test: employee payment proof → fraud report on admin bootstrap.
  * Run: npx tsx scripts/check-fraud-pipeline.ts
  */
+/// <reference lib="dom" />
 import "dotenv/config";
+import sharp from "sharp";
 import { analyzeReceiptFraud } from "../src/services/receiptFraud/receiptFraudService";
 
 const API = process.env.SMOKE_API_BASE ?? "http://localhost:5000/api";
 
-async function login(email: string, password: string, portal: "employee" | "admin") {
+async function login(
+  credentials: { email: string } | { employeeId: string },
+  password: string,
+  portal: "employee" | "admin"
+) {
+  const body =
+    portal === "employee" && "employeeId" in credentials
+      ? { employeeId: credentials.employeeId, password, portal }
+      : { email: "email" in credentials ? credentials.email : "", password, portal };
   const res = await fetch(`${API}/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password, portal }),
+    body: JSON.stringify(body),
   });
   const data = (await res.json()) as { token?: string; message?: string };
-  if (!res.ok || !data.token) throw new Error(`Login failed (${email}): ${data.message ?? res.status}`);
+  const label = "employeeId" in credentials ? credentials.employeeId : credentials.email;
+  if (!res.ok || !data.token) throw new Error(`Login failed (${label}): ${data.message ?? res.status}`);
   return data.token;
 }
-
-import sharp from "sharp";
 
 async function buildTestReceiptJpeg(): Promise<Buffer> {
   return sharp({
@@ -64,12 +73,12 @@ async function main() {
   console.log();
 
   console.log("2) E2E: employee payment proof → admin bootstrap...");
-  const employeeToken = await login("employee@demo.allpay.local", "password123", "employee");
+  const employeeToken = await login({ employeeId: "emp0" }, "password123", "employee");
   const form = new FormData();
   form.append("paymentType", "Cash");
   form.append("amount", "500");
   form.append("description", "Fraud pipeline smoke test");
-  form.append("receipt", new Blob([testImage], { type: "image/jpeg" }), "smoke-test.jpg");
+  form.append("receipt", new Blob([new Uint8Array(testImage)], { type: "image/jpeg" }), "smoke-test.jpg");
 
   const submitRes = await fetch(`${API}/employee/payment-proofs`, {
     method: "POST",
@@ -86,7 +95,7 @@ async function main() {
   const submitTx = submitBody.transaction as { status: string; receiptUrl?: string };
   console.log("   submitted tx:", txId, "| employee sees status:", submitTx.status, "| receiptUrl:", submitTx.receiptUrl ?? "(none)");
 
-  const adminToken = await login("test@example.com", "password123", "admin");
+  const adminToken = await login({ email: "test@example.com" }, "password123", "admin");
   const bootRes = await fetch(`${API}/admin/bootstrap?limit=500`, {
     headers: { Authorization: `Bearer ${adminToken}` },
   });

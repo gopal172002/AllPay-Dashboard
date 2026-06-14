@@ -1,4 +1,12 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  startTransition,
+} from "react";
 import { employeeApi } from "../api/employeeApi";
 import type { Employee, EmployeeDashboardSummary, PaymentProof, Transaction } from "../types";
 
@@ -48,7 +56,9 @@ export const EmployeeDataProvider = ({ children }: { children: React.ReactNode }
   }, []);
 
   useEffect(() => {
-    void load();
+    startTransition(() => {
+      void load();
+    });
   }, [load]);
 
   const filteredTransactions = useMemo(() => {
@@ -113,6 +123,8 @@ export const EmployeeDataProvider = ({ children }: { children: React.ReactNode }
   return <EmployeeDataContext.Provider value={value}>{children}</EmployeeDataContext.Provider>;
 };
 
+// Hook lives with provider; Fast Refresh expects component-only exports in this file.
+// eslint-disable-next-line react-refresh/only-export-components
 export function useEmployeeData() {
   const ctx = useContext(EmployeeDataContext);
   if (!ctx) throw new Error("useEmployeeData must be used within EmployeeDataProvider");

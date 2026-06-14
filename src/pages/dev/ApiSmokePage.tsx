@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, startTransition } from "react";
 import {
   Alert,
   Box,
@@ -40,7 +40,10 @@ export function ApiSmokePage() {
   }, []);
 
   useEffect(() => {
-    if (auto) void run();
+    if (!auto) return;
+    startTransition(() => {
+      void run();
+    });
   }, [auto, run]);
 
   const pass = results?.filter((x) => x.ok).length ?? 0;

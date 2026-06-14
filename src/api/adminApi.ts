@@ -7,6 +7,8 @@ import type {
   ExportAudit,
   Transaction,
 } from "../types";
+import { API_BASE } from "./config";
+import { readJsonResponse } from "./parseResponse";
 
 export interface BootstrapPayload {
   transactions: Transaction[];
@@ -72,8 +74,6 @@ export type PolicyPreviewResponse = {
   hasMore: boolean;
 };
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api";
-
 const request = async <T,>(path: string, init?: RequestInit): Promise<T> => {
   const token = localStorage.getItem("allpay_token");
   const headers: HeadersInit = {
@@ -87,10 +87,10 @@ const request = async <T,>(path: string, init?: RequestInit): Promise<T> => {
     headers,
     ...init,
   });
-  
-  const data = (await res.json()) as T & { error?: string; message?: string };
+
+  const data = (await readJsonResponse(res)) as T & { error?: string; message?: string };
   if (!res.ok) {
-    throw new Error(data.error || data.message || `API error: ${res.status}`);
+    throw new Error(String(data.error || data.message || `API error: ${res.status}`));
   }
   return data as T;
 };
@@ -174,9 +174,49 @@ export const adminApi = {
   },
 
   async inviteEmployee(email: string, department: string, name?: string) {
-    return request<{ ok: boolean; employee: Employee }>("/admin/employees/invite", {
+    return request<{ ok: boolean; employee: Employee; inviteCode: string; message?: string }>(
+      "/admin/employees/invite",
+      {
+        method: "POST",
+        body: JSON.stringify({ email, department, ...(name ? { name } : {}) }),
+      }
+    );
+  },
+
+  async assignEmployeeId(email: string) {
+    return request<{
+      ok: boolean;
+      employeeId: string;
+      inviteCode: string;
+      message: string;
+      employee: Employee;
+    }>("/admin/employees/assign-id", {
       method: "POST",
-      body: JSON.stringify({ email, department, ...(name ? { name } : {}) }),
+      body: JSON.stringify({ email }),
+    });
+  },
+
+  async generateEmployeeInviteCode(email: string) {
+    return request<{
+      ok: boolean;
+      inviteCode: string;
+      message: string;
+      employee: Employee;
+    }>("/admin/employees/generate-invite-code", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    });
+  },
+
+  async resetEmployeeLogin(email: string, employeeId?: string) {
+    return request<{
+      ok: boolean;
+      employeeId: string;
+      hadLogin: boolean;
+      message: string;
+    }>("/admin/employees/reset-login", {
+      method: "POST",
+      body: JSON.stringify({ email, employeeId }),
     });
   },
 
@@ -204,7 +244,6 @@ export const adminApi = {
     transactionId: string,
     file: File
   ): Promise<{ ok: boolean; transactionId: string; receiptUrl: string }> {
-    const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api";
     const token = localStorage.getItem("allpay_token");
     const form = new FormData();
     form.append("receipt", file);

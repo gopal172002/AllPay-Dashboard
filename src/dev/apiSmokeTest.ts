@@ -3,7 +3,7 @@
  * Expects a seeded DB (e.g. test@example.com / password123) for admin calls.
  */
 
-const API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api").replace(/\/$/, "");
+import { API_BASE } from "../api/config";
 
 export type SmokeResult = {
   id: string;

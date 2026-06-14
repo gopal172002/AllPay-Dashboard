@@ -347,6 +347,252 @@ describe("AllPay API", () => {
     expect(res.body.ok).toBe(true);
     expect(res.body.employee?.email).toBe("invite-unique-1@example.com");
     expect(res.body.employee?.inviteToken).toBeDefined();
+    expect(res.body.inviteCode).toMatch(/^ALLPAY[A-Z0-9]{6}$/);
+    expect(res.body.employee?.inviteCode).toBe(res.body.inviteCode);
+    expect(res.body.employee?.idAssigned).toBe(false);
+    expect(String(res.body.employee?.id)).toMatch(/^PEND-/);
+  });
+
+  it("mobile onboarding: invite code → profile → OTP → complete", async () => {
+    const inviteRes = await request(app)
+      .post("/api/admin/employees/invite")
+      .set(authHeader(token))
+      .send({ email: "mobile-onboard@test.local", name: "Mobile Onboard", department: "Sales" });
+    expect(inviteRes.status).toBe(200);
+    const inviteCode = inviteRes.body.inviteCode as string;
+
+    const verifyRes = await request(app)
+      .post("/api/mobile/onboarding/verify-invite")
+      .send({ inviteCode });
+    expect(verifyRes.status).toBe(200);
+    expect(verifyRes.body.ok).toBe(true);
+    expect(verifyRes.body.profile?.email).toBe("mobile-onboard@test.local");
+    expect(verifyRes.body.profile?.name).toBe("Mobile Onboard");
+    const onboardingToken = verifyRes.body.onboardingToken as string;
+
+    const confirmRes = await request(app)
+      .post("/api/mobile/onboarding/confirm-profile")
+      .set(authHeader(onboardingToken))
+      .send({ phone: "+919876543210" });
+    expect(confirmRes.status).toBe(200);
+    expect(confirmRes.body.profile?.phone).toBe("+919876543210");
+
+    const otpSendRes = await request(app)
+      .post("/api/mobile/onboarding/send-otp")
+      .set(authHeader(onboardingToken));
+    expect(otpSendRes.status).toBe(200);
+
+    const otpVerifyRes = await request(app)
+      .post("/api/mobile/onboarding/verify-otp")
+      .set(authHeader(onboardingToken))
+      .send({ otp: "123456" });
+    expect(otpVerifyRes.status).toBe(200);
+    expect(otpVerifyRes.body.step).toBe("complete");
+
+    const completeRes = await request(app)
+      .post("/api/mobile/onboarding/complete")
+      .set(authHeader(onboardingToken));
+    expect(completeRes.status).toBe(200);
+    expect(completeRes.body.token).toBeTruthy();
+    expect(completeRes.body.profile?.email).toBe("mobile-onboard@test.local");
+  });
+
+  it("POST /api/mobile/onboarding/verify-invite accepts ALLPAY123 seed code", async () => {
+    const res = await request(app)
+      .post("/api/mobile/onboarding/company-invite")
+      .send({ inviteCode: "ALLPAY123" });
+    expect(res.status).toBe(200);
+    expect(res.body.companyName).toBeTruthy();
+    expect(res.body.profile?.email).toBe("emp1@allpay.in");
+  });
+
+  it("mobile app verify-profile step matches ALLPAY123 employee email", async () => {
+    const step1 = await request(app)
+      .post("/api/mobile/onboarding/company-invite")
+      .send({ inviteCode: "ALLPAY123" });
+    expect(step1.status).toBe(200);
+    const onboardingToken = step1.body.onboardingToken as string;
+
+    const step2 = await request(app)
+      .post("/api/mobile/onboarding/verify-profile")
+      .send({
+        onboardingToken,
+        email: "emp1@allpay.in",
+        fullName: "Employee 1",
+        phone: "9876543210",
+      });
+    expect(step2.status).toBe(200);
+    expect(step2.body.ok).toBe(true);
+    expect(step2.body.step).toBe("otp");
+  });
+
+  it("employee register → assign-id → login with serial ID", async () => {
+    const reg = await request(app).post("/api/auth/employee/register").send({
+      email: "flow.employee@example.com",
+      fullName: "Flow Employee",
+      password: "password123",
+      department: "Finance",
+    });
+    expect(reg.status).toBe(200);
+    expect(reg.body.pending).toBe(true);
+
+    const pendingLogin = await request(app).post("/api/auth/login").send({
+      employeeId: "emp99",
+      password: "password123",
+      portal: "employee",
+    });
+    expect(pendingLogin.status).toBe(400);
+
+    const assign = await request(app)
+      .post("/api/admin/employees/assign-id")
+      .set(authHeader(token))
+      .send({ email: "flow.employee@example.com" });
+    expect(assign.status).toBe(200);
+    expect(assign.body.employeeId).toMatch(/^emp\d+$/);
+
+    const login = await request(app).post("/api/auth/login").send({
+      employeeId: assign.body.employeeId,
+      password: "password123",
+      portal: "employee",
+    });
+    expect(login.status).toBe(200);
+    expect(login.body.user.employeeId).toBe(assign.body.employeeId);
+  });
+
+  it("admin reset-login clears AuthUser so employee can set password again", async () => {
+    const invite = await request(app)
+      .post("/api/admin/employees/invite")
+      .set(authHeader(token))
+      .send({ email: "reset-me@example.com", department: "Ops" });
+    const assign = await request(app)
+      .post("/api/admin/employees/assign-id")
+      .set(authHeader(token))
+      .send({ email: "reset-me@example.com" });
+    const empId = assign.body.employeeId as string;
+
+    await request(app).post("/api/auth/employee/register").send({
+      email: "reset-me@example.com",
+      employeeId: empId,
+      password: "password123",
+    });
+
+    const reset = await request(app)
+      .post("/api/admin/employees/reset-login")
+      .set(authHeader(token))
+      .send({ employeeId: empId });
+    expect(reset.status).toBe(200);
+    expect(reset.body.hadLogin).toBe(true);
+
+    const login = await request(app).post("/api/auth/login").send({
+      employeeId: empId,
+      password: "password123",
+      portal: "employee",
+    });
+    expect(login.status).toBe(400);
+    expect(login.body.code).toBe("NEED_PASSWORD_SETUP");
+  });
+
+  it("login with assigned ID but no password returns NEED_PASSWORD_SETUP", async () => {
+    const invite = await request(app)
+      .post("/api/admin/employees/invite")
+      .set(authHeader(token))
+      .send({ email: "no-pass@example.com", department: "Ops" });
+    const assign = await request(app)
+      .post("/api/admin/employees/assign-id")
+      .set(authHeader(token))
+      .send({ email: "no-pass@example.com" });
+    const empId = assign.body.employeeId as string;
+
+    const login = await request(app).post("/api/auth/login").send({
+      employeeId: empId,
+      password: "anything123",
+      portal: "employee",
+    });
+    expect(login.status).toBe(400);
+    expect(login.body.code).toBe("NEED_PASSWORD_SETUP");
+
+    const complete = await request(app).post("/api/auth/employee/register").send({
+      email: "no-pass@example.com",
+      employeeId: empId,
+      password: "password123",
+    });
+    expect(complete.status).toBe(200);
+    expect(complete.body.ready).toBe(true);
+
+    const login2 = await request(app).post("/api/auth/login").send({
+      employeeId: empId,
+      password: "password123",
+      portal: "employee",
+    });
+    expect(login2.status).toBe(200);
+  });
+
+  it("admin assigns ID before register → employee completes registration with ID", async () => {
+    const invite = await request(app)
+      .post("/api/admin/employees/invite")
+      .set(authHeader(token))
+      .send({ email: "assign-first@example.com", department: "Ops", name: "Assign First" });
+    expect(invite.status).toBe(200);
+
+    const assign = await request(app)
+      .post("/api/admin/employees/assign-id")
+      .set(authHeader(token))
+      .send({ email: "assign-first@example.com" });
+    expect(assign.status).toBe(200);
+    const empId = assign.body.employeeId as string;
+
+    const blocked = await request(app).post("/api/auth/employee/register").send({
+      email: "assign-first@example.com",
+      fullName: "Assign First",
+      password: "password123",
+    });
+    expect(blocked.status).toBe(400);
+    expect(blocked.body.code).toBe("COMPLETE_REGISTRATION");
+
+    const complete = await request(app).post("/api/auth/employee/register").send({
+      email: "assign-first@example.com",
+      employeeId: empId,
+      password: "password123",
+    });
+    expect(complete.status).toBe(200);
+    expect(complete.body.ready).toBe(true);
+
+    const login = await request(app).post("/api/auth/login").send({
+      employeeId: empId,
+      password: "password123",
+      portal: "employee",
+    });
+    expect(login.status).toBe(200);
+    expect(login.body.user.employeeId).toBe(empId);
+  });
+
+  it("complete registration rejected when account already exists from new joiner", async () => {
+    await request(app).post("/api/auth/employee/register").send({
+      email: "double-reg@example.com",
+      fullName: "Double Reg",
+      password: "password123",
+    });
+    const assign = await request(app)
+      .post("/api/admin/employees/assign-id")
+      .set(authHeader(token))
+      .send({ email: "double-reg@example.com" });
+    const empId = assign.body.employeeId as string;
+
+    const again = await request(app).post("/api/auth/employee/register").send({
+      email: "double-reg@example.com",
+      employeeId: empId,
+      password: "newpass123",
+    });
+    expect(again.status).toBe(400);
+    expect(again.body.code).toBe("ALREADY_REGISTERED");
+    expect(again.body.employeeId).toBe(empId);
+
+    const login = await request(app).post("/api/auth/login").send({
+      employeeId: empId,
+      password: "password123",
+      portal: "employee",
+    });
+    expect(login.status).toBe(200);
   });
 
   it("POST /api/admin/transactions/:id/receipt uploads and returns receiptUrl (S3 mocked)", async () => {

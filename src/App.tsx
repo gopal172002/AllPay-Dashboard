@@ -15,6 +15,7 @@ import { AdminPoliciesPage } from "./pages/admin/AdminPoliciesPage";
 import { AdminRolesPage } from "./pages/admin/AdminRolesPage";
 import { AdminTransactionDetailPage } from "./pages/admin/AdminTransactionDetailPage";
 import { AdminTransactionsPage } from "./pages/admin/AdminTransactionsPage";
+import { EmployeeRegisterPage } from "./pages/auth/EmployeeRegisterPage";
 import { LoginPage } from "./pages/auth/LoginPage";
 import { SignUpPage } from "./pages/auth/SignUpPage";
 import { EmployeeActivityPage } from "./pages/employee/EmployeeActivityPage";
@@ -49,6 +50,7 @@ function App() {
           <Route path="/home" element={<Navigate to="/" replace />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/signup" element={<SignUpPage />} />
+          <Route path="/employee/register" element={<EmployeeRegisterPage />} />
           {import.meta.env.DEV ? <Route path="/dev/api-smoke" element={<ApiSmokePage />} /> : null}
 
           <Route path="/admin" element={<AdminProtectedLayout />}>

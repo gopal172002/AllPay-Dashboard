@@ -20,8 +20,13 @@ export interface Employee {
   active: boolean;
   onboarded: boolean;
   travelApproved: boolean;
+  /** True once admin assigns a serial ID (emp1, emp2, …). */
+  idAssigned?: boolean;
   /** Set when the employee was created via admin invite (for future onboarding link). */
   inviteToken?: string;
+  /** Mobile app invite code (e.g. ALLPAY7K3M2N). */
+  inviteCode?: string;
+  phone?: string;
 }
 
 export interface TransactionFlag {
